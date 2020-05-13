@@ -24,10 +24,12 @@ set ( ALL_LIBS
 
 add_executable(compute01.out 
     "src/glad.c"
+    "src/window.hpp"
     "src/compute01.cpp"
     )
 add_executable(compute02.out 
     "src/glad.c"
+    "src/window.hpp"
     "src/compute02.cpp"
     )
 target_link_libraries(compute01.out ${ALL_LIBS})
