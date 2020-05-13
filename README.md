@@ -38,7 +38,7 @@ gcc with boost.
 There will be two copies of executables one in build folder another in `bin`
 folder.
 Use the ones in `bin` folder since reference to any media is hardcoded inside
-the code with respect to relative to `bin`.
+the code with respect to `bin`.
 
 I use `cmake-gui` to specifically select the compiler during the configuration
 process, I suggest you do the same if you have multiple compilers with
