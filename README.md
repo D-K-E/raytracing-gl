@@ -54,6 +54,11 @@ Most of the real work happens inside compute shaders named `compute01.comp` or
 `compute02.comp`. The numbers suggest complexity. 01 is the simplest, 02 is a
 little more difficult than 01 etc. 
 
+During the execution of `compute02.out` and onwards gpu might start to choke.
+Try lowering the size of the workgroups in the shader, if that does not help,
+try lowering the `psample` and `depth` that is passed on to `ray_color`
+function.
+
 ## Screenshots
 
 - The executable `compute01.out` should give you this: ![compute01
