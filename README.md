@@ -1,5 +1,6 @@
 # raytracing-gl
-OpenGL compute shader port of 'Raytracing in One Weekend' by P. Shirley
+OpenGL compute shader port of 
+[Raytracing in One Weekend](https://raytracing.github.io/books/RayTracingInOneWeekend.html) by P. Shirley
 
 This repository follows closely the examples introduced by the 
 phenomenal "Raytracing in One Weekend" by P. Shirley.
