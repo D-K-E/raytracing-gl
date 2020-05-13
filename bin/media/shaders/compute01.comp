@@ -1,0 +1,152 @@
+#version 430
+layout(local_size_x = 4, local_size_y = 4) in; // local work_group_size
+layout(rgba32f, binding = 0) uniform image2D img_output;
+// internal format of the image same as glTexImage2D
+
+// start constants
+// constants.hpp
+float PI = 3.1415926535;
+float INFINITY = 1.0 / 0.0;
+// end constants
+
+//
+struct Ray {
+  vec3 origin;
+  vec3 direction;
+};
+
+vec3 at(Ray r, float dist) { return r.direction * dist + r.origin; }
+
+struct HitRecord {
+  vec3 point;
+  vec3 normal;
+  float dist;
+  bool front_face;
+};
+
+void set_face_normal(inout HitRecord rec, in Ray r, in vec3 out_normal) {
+  // set face normal to hit record did we hit front or back
+  rec.front_face = dot(r.direction, out_normal) < 0;
+  rec.normal = (rec.front_face) ? out_normal : -1 * out_normal;
+}
+
+struct Sphere {
+  vec3 center;
+  float radius;
+};
+
+bool hitSphere(in Sphere s, in Ray r, float dist_min, float dist_max,
+               inout HitRecord record) {
+  // kureye isin vurdu mu onu test eden fonksiyon
+  vec3 origin_to_center = r.origin - s.center;
+  float a = dot(r.direction, r.direction);
+  float half_b = dot(origin_to_center, r.direction);
+  float c = dot(origin_to_center, origin_to_center) - s.radius * s.radius;
+  float isHit = half_b * half_b - a * c;
+  float margin;
+  if (isHit > 0) {
+    float root = sqrt(isHit);
+    margin = (-1 * half_b - root) / a;
+    if (margin < dist_max && margin > dist_min) {
+      record.dist = margin;
+      record.point = at(r, record.dist);
+      vec3 out_normal = (record.point - s.center) / s.radius;
+      set_face_normal(record, r, out_normal);
+      return true;
+    }
+    margin = (-1 * half_b + root) / a;
+    if (margin < dist_max && margin > dist_min) {
+      record.dist = margin;
+      record.point = at(r, record.dist);
+      vec3 out_normal = (record.point - s.center) / s.radius;
+      set_face_normal(record, r, out_normal);
+      return true;
+    }
+  }
+  return false;
+}
+
+#define SCENE_OBJECT_NB 2
+
+struct SceneObj {
+  int type; // 0 sphere, 1, other
+  Sphere sp;
+};
+
+struct Scene {
+  SceneObj ss[SCENE_OBJECT_NB];
+};
+
+bool hit_scene(in Scene scene, in Ray r, float dmin, float dmax,
+               inout HitRecord record) {
+  // check if sphere is hit
+  HitRecord temp;
+  bool hit_ = false;
+  float current_closest = dmax;
+  for (int i = 0; i < SCENE_OBJECT_NB; i++) {
+    SceneObj sobj = scene.ss[i];
+    if (sobj.type == 0) {
+      if (hitSphere(sobj.sp, r, dmin, dmax, temp)) {
+        hit_ = true;
+        current_closest = temp.dist;
+        record = temp;
+      }
+    }
+  }
+  return hit_;
+}
+
+vec3 ray_color(in Ray r, in Scene scene) {
+  //
+  HitRecord rec;
+  if (hit_scene(scene, r, 0, INFINITY, rec)) {
+    return 0.5 * (rec.normal + vec3(1.0));
+  }
+  vec3 dir = normalize(r.direction);
+  float temp = 0.5 * (dir.y + 1.0);
+  return (1.0 - temp) * vec3(1.0) + temp * vec3(0.5, 0.8, 1.0);
+}
+
+void main() {
+  // index of global work group
+  vec4 pixel = vec4(0.0, 0.0, 0.0, 1.0);
+  ivec2 pixel_index = ivec2(gl_GlobalInvocationID.xy);
+  ivec2 img_dims = imageSize(img_output); // image dimensions
+  int imwidth = img_dims.x;
+  int imheight = img_dims.y;
+  int i = pixel_index.x;
+  int j = pixel_index.y;
+
+  // -------------- declare objects ---------------
+
+  Scene scene;
+  SceneObj s1, s2;
+  s1.type = 0;
+  s2.type = 0;
+  Sphere s4 = {vec3(0, 0, -1), 0.5};
+  Sphere s5 = {vec3(0, -100.5, -1), 100};
+  s1.sp = s4;
+  s2.sp = s5;
+  scene.ss[0] = s2;
+  scene.ss[1] = s1;
+
+  //
+  //
+  // -------------- declare objects end -----------
+  //
+
+  vec3 origin = vec3(0.0, 0.0, 0.0);
+  vec3 hor = vec3(4.0, 0.0, 0.0);
+  vec3 ver = vec3(0.0, 2.0, 0.0);
+  vec3 lower_left_corner = vec3(-2.0, -1.0, -1.0);
+
+  float u = float(i) / (float(imwidth) - 1);
+  float v = float(j) / (float(imheight) - 1);
+  Ray r;
+  r.origin = origin;
+  r.direction = lower_left_corner + u * hor + v * ver;
+  vec3 rcolor = ray_color(r, scene);
+
+  // output specific pixel in the image
+  imageStore(img_output, pixel_index, vec4(rcolor, 1.0));
+}
