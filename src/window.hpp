@@ -6,6 +6,10 @@
 //
 #include <GLFW/glfw3.h>
 #include <custom/shader.hpp>
+//
+#define STB_IMAGE_IMPLEMENTATION
+#include <custom/stb_image.h>
+//
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -200,6 +204,38 @@ void setTexture(GLuint texture_output, unsigned int w, unsigned int h) {
 
   // end texture handling
   gerr();
+}
+void setTexture(GLuint texture_input, const char *fname) {
+  // set texture related
+
+  int width, height, nbChannels;
+  unsigned char *data = stbi_load(fname, &width, &height, &nbChannels, 0);
+  if (data) {
+    GLenum format;
+    if (nbChannels == 1) {
+      format = GL_RED;
+    } else if (nbChannels == 3) {
+      format = GL_RGB;
+    } else if (nbChannels == 4) {
+      format = GL_RGBA;
+    }
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, texture_input);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGB,
+                 GL_FLOAT, data);
+    glBindImageTexture(1, texture_input, 0, GL_FALSE, 0, GL_READ_ONLY,
+                       GL_RGBA32F);
+
+    // end texture handling
+    gerr();
+  } else {
+    std::cout << "Failed to load texture" << std::endl;
+  }
+  stbi_image_free(data);
 }
 
 void computeInfo() {

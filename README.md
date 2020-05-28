@@ -20,14 +20,19 @@ probably be lowered.
 
 - Cmake >= 3.0.2
 - OpenGL >= 4.3
-- GLFW 
+- GLFW: Path to its shared library .so file is hardcoded to CMakeLists.txt, as
+  `set( GLFW_SHARED_LIB "${PROJECT_SOURCE_DIR}/libs/glfw/src/libglfw.so") `
+  because I could not come up with a more generic solution. Please change it,
+  point yours, or make a suggestion via issues.
+
 - Glad function pointers for OpenGL 4.3
 - C++ 17 for using `<filesystem>`
 - Clang >= 9 again for using `<filesystem>`. 
 
 If you are willing to use `<boost/filesystem>` instead of standard library,
-the compiler requirement can be drop to clang > 5.5, you can also use
-gcc with boost.
+the compiler requirement can be drop to clang > 5.5, you can also use gcc with
+boost. If you decided to pursue this path, you should also change the
+`filesystem` header in `window.hpp`.
 
 ## Compiling the code
 
@@ -59,6 +64,13 @@ During the execution of `compute02.out` and onwards gpu might start to choke.
 Try lowering the size of the workgroups in the shader, if that does not help,
 try lowering the `psample` and `depth` that is passed on to `ray_color`
 function.
+
+Unless you have a very very good machine or a particular reason DO NOT LAUNCH
+`./weekend.out`. It is there as a proof of concept. Ray tracing 485 object
+naively, that is with no acceleration structure whatsoever, would surely choke
+your gpu. If you really want to see something similar in cover picture. I
+suggest you to lover the amount of spheres in the `random_scene` loop, and
+change the `SCENE_OBJ_NB` accordingly.
 
 ## Screenshots
 

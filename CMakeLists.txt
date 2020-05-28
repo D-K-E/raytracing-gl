@@ -52,6 +52,13 @@ add_executable(compute06.out
     "src/window.hpp"
     "src/compute06.cpp"
     )
+add_executable(compute07.out 
+    "src/glad.c"
+    "src/window.hpp"
+    "src/compute07.cpp"
+    )
+
+
 
 
 add_executable(weekend.out 
@@ -66,6 +73,7 @@ target_link_libraries(compute03.out ${ALL_LIBS})
 target_link_libraries(compute04.out ${ALL_LIBS})
 target_link_libraries(compute05.out ${ALL_LIBS})
 target_link_libraries(compute06.out ${ALL_LIBS})
+target_link_libraries(compute07.out ${ALL_LIBS})
 target_link_libraries(weekend.out ${ALL_LIBS})
 
 install(TARGETS compute01.out DESTINATION "${PROJECT_SOURCE_DIR}/bin/")
@@ -74,4 +82,5 @@ install(TARGETS compute03.out DESTINATION "${PROJECT_SOURCE_DIR}/bin/")
 install(TARGETS compute04.out DESTINATION "${PROJECT_SOURCE_DIR}/bin/")
 install(TARGETS compute05.out DESTINATION "${PROJECT_SOURCE_DIR}/bin/")
 install(TARGETS compute06.out DESTINATION "${PROJECT_SOURCE_DIR}/bin/")
+install(TARGETS compute07.out DESTINATION "${PROJECT_SOURCE_DIR}/bin/")
 install(TARGETS weekend.out DESTINATION "${PROJECT_SOURCE_DIR}/bin/")
