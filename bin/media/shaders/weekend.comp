@@ -1,0 +1,606 @@
+#version 430
+layout(local_size_x = 1, local_size_y = 1) in; // local work_group_size
+layout(rgba32f, binding = 0) uniform image2D img_output;
+// internal format of the image same as glTexImage2D
+//
+#define HITTABLE_NB 485
+
+// ------------- start commons.hpp -------------------------------------
+//
+// start constants.hpp
+float PI = 3.1415926535;
+float INFINITY = 1.0 / 0.0;
+// end constants.hpp
+//
+// start functions.hpp
+float degree_to_radian(float degree) {
+  //
+  return degree * PI / 180.0;
+}
+float rand(vec2 co) {
+  // random gen
+  float a = 12.9898;
+  float b = 78.233;
+  float c = 43758.5453;
+  float dt = dot(co.xy, vec2(a, b));
+  float sn = mod(dt, 3.14);
+  return fract(sin(sn) * c);
+}
+float random_double() {
+  // random double
+  return rand(vec2(0.0, 1.0));
+}
+float random_double(float mi, float mx) {
+  // random double
+  return rand(vec2(mi, mx));
+}
+int random_int() {
+  //
+  return floatBitsToInt(random_double());
+}
+int random_int(int fmin, int fmax) {
+  return floatBitsToInt(random_double(fmin, fmax));
+}
+// end functions.hpp
+// start vec3.hpp
+vec3 random_vec() {
+  // random vector
+  return vec3(random_double(), random_double(), random_double());
+}
+vec3 random_vec(float mi, float ma) {
+  // random vector in given seed
+  return vec3(random_double(mi, ma), random_double(mi, ma),
+              random_double(mi, ma));
+}
+vec3 to_unit(vec3 v) { return normalize(v); }
+float length_squared(vec3 v) { return dot(v, v); }
+vec2 to_spheric(vec3 v) {
+  //
+  //
+  vec3 v2 = to_unit(v);
+  return vec2(atan(v2.x, v2.z), asin(v2.y)); // phi, theta
+}
+vec3 random_in_unit_sphere() {
+  // random in unit sphere
+  while (true) {
+    //
+    vec3 v = random_vec(-1, 1);
+    if (dot(v, v) >= 1) {
+      continue;
+    }
+    return v;
+  }
+}
+vec3 random_unit_vector() {
+  // unit vector
+  float a = random_double(0, 2 * PI);
+  float z = random_double(-1, 1);
+  float r = sqrt(1 - z * z);
+  return vec3(r * cos(a), r * sin(a), z);
+}
+vec3 random_in_hemisphere(vec3 normal) {
+  // normal ekseninde dagilan yon
+  vec3 unit_sphere_dir = random_in_unit_sphere();
+  if (dot(unit_sphere_dir, normal) > 0.0) {
+    return unit_sphere_dir;
+  } else {
+    return -1 * unit_sphere_dir;
+  }
+}
+vec3 random_in_unit_disk() {
+  // lens yakinsamasi için gerekli
+  while (true) {
+    vec3 point = vec3(random_double(-1, 1), random_double(-1, 1), 0);
+    if (dot(point, point) >= 1) {
+      continue;
+    }
+    return point;
+  }
+}
+// end vec3.hpp
+// start ray.hpp
+
+struct Ray {
+  /*N = C + mY
+N: nokta
+C: cikis yeri
+m: mesafe/buyukluk
+Y: yonu
+   */
+  vec3 direction;
+  vec3 origin;
+};
+Ray makeRay(vec3 orig, vec3 dir) {
+  Ray r;
+  r.origin = orig;
+  r.direction = dir;
+  return r;
+}
+
+vec3 at(Ray r, float dist) { return r.direction * dist + r.origin; }
+
+// end ray.hpp
+//
+// --------------------- end commons.hpp -------------------------------------
+//
+// --------------------- start color.hpp ------------------------------------
+
+vec3 fix_color(vec3 pcolor, int samples_per_pixel) {
+  float r, g, b;
+  r = pcolor.x;
+  g = pcolor.y;
+  b = pcolor.z;
+  // scale sample
+  r = sqrt(r / samples_per_pixel);
+  g = sqrt(g / samples_per_pixel);
+  b = sqrt(b / samples_per_pixel);
+  return vec3(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0));
+}
+// --------------------- end color.hpp -------------------------------------
+// --------------------- start camera.hpp ------------------------------------
+struct Camera {
+  vec3 lower_left_corner;
+  vec3 origin;
+  vec3 vertical;
+  vec3 horizontal;
+  vec3 u;
+  vec3 v;
+  vec3 w;
+  float lens_radius;
+  float time0; // shutter open time
+  float time1; // shutter close time
+};
+
+Camera makeCamera(vec3 pos, vec3 target, vec3 up, float vfov,
+                  float aspect_ratio, float aperture, float focus_dist,
+                  float t0, float t1) {
+  // make camera struct
+  Camera cam;
+  cam.origin = pos;
+  cam.time0 = t0;
+  cam.time1 = t1;
+  cam.lens_radius = aperture / 2;
+
+  float theta = degree_to_radian(vfov);
+  float half_height = tan(theta / 2);
+  half_height *= 2.0;
+  float half_width = aspect_ratio * half_height;
+
+  // w, v, u eksenleri
+  cam.w = normalize(pos - target);
+  cam.u = normalize(cross(up, cam.w));
+  cam.v = cross(cam.w, cam.u);
+
+  cam.horizontal = half_width * focus_dist * cam.u;
+  cam.vertical = half_height * focus_dist * cam.v;
+
+  cam.lower_left_corner =
+      cam.origin - cam.horizontal / 2 - cam.vertical / 2 - cam.w * focus_dist;
+  return cam;
+}
+Camera makeCamera() {
+  return makeCamera(vec3(0, 0, -1), // pos
+                    vec3(0, 0, 0),  // target
+                    vec3(0, 1, 0),  // vup
+                    40,             // vfov
+                    1,              // aspect_ratio
+                    0,              // aperature
+                    10,             // focus_dist
+                    0,              // shutter open time
+                    1               // shutter close time
+                    );
+}
+
+Ray get_ray(Camera ca, float u, float v) {
+  // get camera ray
+  vec3 rd = ca.lens_radius * random_in_unit_disk();
+  vec3 offst = ca.u * rd.x + ca.v * rd.y;
+  vec3 r_origin = ca.origin + offst;
+  vec3 r_dir =
+      ca.lower_left_corner + (u * ca.horizontal) + (v * ca.vertical) - r_origin;
+  return makeRay(r_origin, r_dir);
+}
+
+// --------------------- end camera.hpp ------------------------------------
+
+// --------------------- start hittable.hpp ------------------------------------
+//
+struct Material;
+struct HitRecord {
+  vec3 point;
+  vec3 normal;
+  float dist;
+  bool front_face;
+  Material mat_ptr;
+};
+
+// ---------------------- start material.hpp ---------------------------
+struct Lambert {
+  vec3 albedo;
+};
+
+Lambert makeLambert(vec3 clr) {
+  Lambert lam;
+  lam.albedo = clr;
+  return lam;
+}
+
+bool scatterLambert(Lambert lam, in Ray ray_in, in HitRecord record,
+                    inout vec3 attenuation, inout Ray ray_out) {
+
+  // isik kirilsin mi kirilmasin mi
+  vec3 out_dir = record.point + random_in_hemisphere(record.normal);
+  ray_out = makeRay(record.point, out_dir);
+  attenuation = lam.albedo;
+  return true;
+}
+
+struct Metal {
+  vec3 albedo;
+  float roughness;
+};
+Metal makeMetal(vec3 alb, float fuzz) {
+  Metal m;
+  m.albedo = alb;
+  m.roughness = fuzz;
+  return m;
+}
+bool scatterMetal(Metal met, in Ray ray_in, in HitRecord record,
+                  out vec3 attenuation, out Ray ray_out) {
+
+  vec3 unit_in_dir = normalize(ray_in.direction);
+  vec3 out_dir = reflect(unit_in_dir, record.normal);
+  ray_out =
+      makeRay(record.point, out_dir + met.roughness * random_in_unit_sphere());
+  attenuation = met.albedo;
+  return dot(ray_out.direction, record.normal) > 0.0;
+}
+
+struct Dielectric {
+  float ref_idx;
+};
+
+Dielectric makeDielectric(float rfidx) {
+  Dielectric die;
+  die.ref_idx = rfidx;
+  return die;
+}
+
+float fresnelCT(float costheta, float ridx) {
+  // cook torrence fresnel equation
+  float etao = 1 + sqrt(ridx);
+  float etau = 1 - sqrt(ridx);
+  float eta = etao / etau;
+  float g = sqrt(pow(eta, 2) + pow(costheta, 2) - 1);
+  float g_c = g - costheta;
+  float gplusc = g + costheta;
+  float gplus_cc = (gplusc * costheta) - 1;
+  float g_cc = (g_c * costheta) + 1;
+  float oneplus_gcc = 1 + pow(gplus_cc / g_cc, 2);
+  float half_plus_minus = 0.5 * pow(g_c / gplusc, 2);
+  return half_plus_minus * oneplus_gcc;
+}
+float fresnelSchlick(float costheta, float ridx) {
+  //
+  float r0 = (1 - ridx) / (1 + ridx);
+  r0 = r0 * r0;
+  return r0 + (1 - r0) * pow((1 - costheta), 5);
+}
+float get_fresnel(float costheta, float ridx, int choice = 0) {
+  // compute freshnel
+  float fresnel;
+  if (choice == 0) {
+    fresnel = fresnelSchlick(costheta, ridx);
+  } else if (choice == 1) {
+    fresnel = fresnelCT(costheta, ridx);
+  }
+  return fresnel;
+}
+
+bool scatterDielectric(Dielectric diel, in Ray r_in, in HitRecord record,
+                       out vec3 attenuation, out Ray r_out) {
+  // ray out
+  attenuation = vec3(1.0);
+  vec3 unit_in_dir = to_unit(r_in.direction);
+  float eta_over = record.front_face ? 1.0 / diel.ref_idx : diel.ref_idx;
+  float costheta = min(dot(-1 * unit_in_dir, record.normal), 1.0);
+  float sintheta = sqrt(1.0 - costheta * costheta);
+  vec3 ref;
+  if (eta_over * sintheta > 1.0) {
+    //
+    ref = reflect(unit_in_dir, record.normal);
+    r_out = makeRay(record.point, ref);
+    return true;
+  }
+  //
+  float fresnel_term = get_fresnel(costheta, eta_over, 1);
+  if (random_double() < fresnel_term) {
+    ref = reflect(unit_in_dir, record.normal);
+    r_out = makeRay(record.point, ref);
+    return true;
+  }
+  ref = refract(unit_in_dir, record.normal, eta_over);
+  r_out = makeRay(record.point, ref);
+  return true;
+}
+
+struct Material {
+  int type; // 0: lambert, 1: metal, 2: dielectric;
+  Lambert lam;
+  Metal met;
+  Dielectric die;
+};
+
+bool scatter(Material mat_ptr, in Ray ray_in, in HitRecord record,
+             inout vec3 attenuation, inout Ray ray_out) {
+  // scatter material
+  if (mat_ptr.type == 0) {
+    return scatterLambert(mat_ptr.lam, ray_in, record, attenuation, ray_out);
+  } else if (mat_ptr.type == 1) {
+    return scatterMetal(mat_ptr.met, ray_in, record, attenuation, ray_out);
+  } else if (mat_ptr.type == 2) {
+    return scatterDielectric(mat_ptr.die, ray_in, record, attenuation, ray_out);
+  } else {
+    return false;
+  }
+}
+// --------------------------- end material ------------------------------
+
+//
+
+void set_face_normal(inout HitRecord rec, in Ray r, in vec3 out_normal) {
+  // set face normal to hit record did we hit front or back
+  rec.front_face = dot(r.direction, out_normal) < 0;
+  rec.normal = (rec.front_face) ? out_normal : -1 * out_normal;
+}
+
+// --------------------------- start sphere ------------------------
+
+struct Sphere {
+  vec3 center;
+  float radius;
+  Material mat_ptr;
+};
+
+Sphere makeSphere(vec3 cent, float r, Material mat) {
+  Sphere sp;
+  sp.center = cent;
+  sp.radius = r;
+  sp.mat_ptr = mat;
+  return sp;
+}
+
+struct Hittable {
+  int type; // 0 sphere, 1, other
+  Sphere sp;
+};
+
+bool hitSphere(in Sphere sp, in Ray r, float dist_min, float dist_max,
+               inout HitRecord record) {
+  // kureye isin vurdu mu onu test eden fonksiyon
+  vec3 origin_to_center = r.origin - sp.center;
+  float a = dot(r.direction, r.direction);
+  float half_b = dot(origin_to_center, r.direction);
+  float c = dot(origin_to_center, origin_to_center) - sp.radius * sp.radius;
+  float isHit = half_b * half_b - a * c;
+  float margin;
+  if (isHit > 0) {
+    float root = sqrt(isHit);
+    margin = (-1 * half_b - root) / a;
+    if (margin < dist_max && margin > dist_min) {
+      record.dist = margin;
+      record.point = at(r, record.dist);
+      vec3 out_normal = (record.point - sp.center) / sp.radius;
+      set_face_normal(record, r, out_normal);
+      record.mat_ptr = sp.mat_ptr;
+      return true;
+    }
+    margin = (-1 * half_b + root) / a;
+    if (margin < dist_max && margin > dist_min) {
+      record.dist = margin;
+      record.point = at(r, record.dist);
+      vec3 out_normal = (record.point - sp.center) / sp.radius;
+      set_face_normal(record, r, out_normal);
+      record.mat_ptr = sp.mat_ptr;
+      return true;
+    }
+  }
+  return false;
+}
+
+// ----------------- end sphere ------------------------------------
+// ----------------- start HittableList ------------------------------------
+
+struct HittableList {
+  Hittable hs[HITTABLE_NB];
+};
+
+void insert2Scene(inout HittableList hl, Hittable h, int ind) {
+  //
+  hl.hs[ind] = h;
+}
+
+bool hit_scene(in HittableList scene, in Ray r, float dmin, float dmax,
+               inout HitRecord record) {
+  // check if sphere is hit
+  HitRecord temp;
+  bool hit_ = false;
+  float current_closest = dmax;
+  for (int i = 0; i < HITTABLE_NB; i++) {
+    Hittable sobj = scene.hs[i];
+    if (sobj.type == 0) {
+      if (hitSphere(sobj.sp, r, dmin, current_closest, temp)) {
+        hit_ = true;
+        current_closest = temp.dist;
+        record = temp;
+      }
+    }
+  }
+  return hit_;
+}
+// ----------------- end HittableList ------------------------------------
+vec3 ray_color(in Ray r, in HittableList scene, int depth) {
+  //
+  Ray r_in;
+  r_in.origin = r.origin;
+  r_in.direction = r.direction;
+  vec3 bcolor = vec3(1);
+
+  while (true) {
+    if (depth <= 0) {
+      //
+      return vec3(0);
+      // return bcolor;
+    }
+    HitRecord rec;
+    if (hit_scene(scene, r_in, 0.001, INFINITY, rec)) {
+      Ray r_out;
+      vec3 atten;
+      if (scatter(rec.mat_ptr, r_in, rec, atten, r_out) == true) {
+        r_in = r_out;
+        bcolor *= atten;
+        depth--;
+      } else {
+        return vec3(0);
+      }
+    } else {
+      vec3 dir = normalize(r_in.direction);
+      float temp = 0.5 * (dir.y + 1.0);
+      bcolor *= vec3(1.0 - temp) + temp * vec3(0.5, 0.7, 1.0);
+      return bcolor;
+    }
+  }
+}
+
+HittableList random_scene() {
+  HittableList scene;
+
+  //---------------- ground ------------------------
+  Material m1;
+  m1.type = 0;
+  m1.lam = makeLambert(vec3(0.5));
+  Sphere ground = makeSphere(vec3(0, -1000, 0), 1000, m1);
+  Hittable h1;
+  h1.type = 0;
+  h1.sp = ground;
+  insert2Scene(scene, h1, 0);
+  // ----------------------------------------------
+  int i = 1;
+  for (int a = -11; a < 11; a++) {
+    for (int b = -11; b < 11; b++) {
+      float choose_mat = random_double();
+      vec3 center =
+          vec3(a + 0.9 * random_double(), 0.2, b + 0.9 * random_double());
+      if (length(center - vec3(4, 0.2, 0)) > 0.9) {
+        if (choose_mat < 0.8) {
+          // diffuse
+          Lambert lam = makeLambert(random_vec() * random_vec());
+          Material m;
+          m.type = 0;
+          m.lam = lam;
+          Hittable h;
+          h.type = 0;
+          h.sp = makeSphere(center, 0.2, m);
+          insert2Scene(scene, h, i);
+          i++;
+        } else if (choose_mat < 0.95) {
+          // metal
+          Material m;
+          m.type = 1;
+          m.met = makeMetal(random_vec(0.5, 1), random_double(0, 0.5));
+          ;
+          Hittable h;
+          h.type = 0;
+          h.sp = makeSphere(center, 0.2, m);
+          insert2Scene(scene, h, i);
+          i++;
+
+        } else {
+          // glass
+          Material m;
+          m.type = 2;
+          m.die = makeDielectric(1.5);
+          ;
+          Hittable h;
+          h.type = 0;
+          h.sp = makeSphere(center, 0.2, m);
+          insert2Scene(scene, h, i);
+          i++;
+        }
+      }
+    }
+  }
+  Material m2;
+  m2.type = 2;
+  m2.die = makeDielectric(1.5);
+  ;
+  Hittable h2;
+  h2.type = 0;
+  h2.sp = makeSphere(vec3(0, 1, 0), 1.0, m2);
+  insert2Scene(scene, h2, i);
+  i++;
+
+  Material m3;
+  m3.type = 0;
+  m3.lam = makeLambert(vec3(0.4, 0.2, 0.1));
+  Hittable h3;
+  h3.type = 0;
+  h3.sp = makeSphere(vec3(-4, 1, 0), 1.0, m3);
+  insert2Scene(scene, h3, i);
+  i++;
+
+  Material m4;
+  m4.type = 1;
+  m4.met = makeMetal(vec3(0.7, 0.6, 0.5), 0);
+  Hittable h4;
+  h4.type = 0;
+  h4.sp = makeSphere(vec3(4, 1, 0), 1.0, m4);
+  insert2Scene(scene, h4, i);
+
+  return scene;
+}
+
+void main() {
+  // index of global work group
+  vec4 pixel = vec4(0.0, 0.0, 0.0, 1.0);
+  ivec2 pixel_index = ivec2(gl_GlobalInvocationID.xy);
+  ivec2 img_dims = imageSize(img_output); // image dimensions
+  int imwidth = img_dims.x;
+  int imheight = img_dims.y;
+  int i = pixel_index.x;
+  int j = pixel_index.y;
+  int mdepth = 5;
+  int psample = 20;
+  float aspect_ratio = float(imwidth / imheight);
+
+  // -------------- declare objects ---------------
+
+  HittableList scene = random_scene();
+
+  vec3 origin = vec3(13, 2, 3);
+  vec3 target = vec3(0, 0, 0);
+  vec3 vup = vec3(0, 1, 0);
+  float dist_to_focus = 5;
+  float aperature = 0.1;
+
+  Camera cam = makeCamera(origin, target, vup, 30, aspect_ratio, aperature,
+                          dist_to_focus, 0, 1);
+  //
+  //
+  // -------------- declare objects end -----------
+  //
+  vec3 rcolor = vec3(0);
+
+  for (int k = 0; k < psample; k++) {
+
+    float u = float(i + random_double()) / (float(imwidth) - 1);
+    float v = float(j + random_double()) / (float(imheight) - 1);
+    Ray r = get_ray(cam, u, v);
+    rcolor += ray_color(r, scene, mdepth);
+  }
+  rcolor = fix_color(rcolor, psample);
+
+  // output specific pixel in the image
+  imageStore(img_output, pixel_index, vec4(rcolor, 1.0));
+  // imageStore(img_output, pixel_index, vec4(sphere_radiusS[pixel_index.x]));
+}

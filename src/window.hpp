@@ -1,3 +1,5 @@
+#ifndef WINDOW_HPP
+#define WINDOW_HPP
 // boiler plate
 // license: see LICENSE
 #include <glad/glad.h>
@@ -9,6 +11,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace filesystem = std::filesystem;
 filesystem::path current_dir(filesystem::current_path());
@@ -25,14 +28,34 @@ filesystem::path textureDirPath = current_dir / mediaDir / textureDir;
 // initialization code
 const bool DEBUG = true;
 // debug function
-void gerr() {
+void gerrf(const char *file, int line) {
   if (DEBUG) {
     GLenum err = glGetError();
     if (err != 0) {
-      std::cout << err << std::endl;
+      std::string msg;
+      if (err == 1280) {
+        msg = "enumeration parameter is not legal";
+      } else if (err == 1281) {
+        msg = "value parameter is not legal";
+      } else if (err == 1282) {
+        msg = "state is not legal for given parameters";
+      } else if (err == 1283) {
+        msg = "stack pushing causes stack overflow";
+      } else if (err == 1284) {
+        msg = "stack popping occurs while stack is at its lowest point, stack "
+              "undeflow";
+      } else if (err == 1285) {
+        msg = "memory allocation operation can not allocate enough memory";
+      } else if (err == 1286) {
+        msg = "reading or writing to an incomplete framebuffer";
+      }
+
+      std::cout << err << ": " << msg << " | " << file << " (" << line << ")"
+                << std::endl;
     }
   }
 }
+#define gerr() gerrf(__FILE__, __LINE__)
 void printDebug(const char *mes, float arg) {
   std::cout << mes << " " << arg << std::endl;
 }
@@ -57,6 +80,54 @@ void printDebug(const char *mes, glm::mat4 arg) {
   printDebug("col3: ", arg[2]);
   printDebug("col3: ", arg[3]);
 }
+// other utility code
+std::string concat2String(const std::string &s1, std::ostringstream s2) {
+  //
+  std::ostringstream s;
+  s << s1 << s2.str();
+  return s.str();
+}
+std::string concat2String(const std::string &s1, const char *s2) {
+  std::ostringstream s3;
+  s3 << s1;
+  std::ostringstream s;
+  s << s3.str() << std::string(s2);
+  return s.str();
+}
+std::string concat2String(const std::string &s1, int i) {
+  std::ostringstream s3;
+  s3 << s1;
+
+  std::ostringstream s;
+  s << s3.str() << i;
+  return s.str();
+}
+std::string concat2String(const std::string &s1, std::vector<int> is) {
+  std::ostringstream s3;
+  s3 << s1;
+
+  std::ostringstream s;
+  for (const auto &i : is) {
+    s3 << i;
+  }
+  s << s3.str();
+  return s.str();
+}
+
+std::string concat2String(const std::string &s1, std::vector<std::string> ss) {
+  std::ostringstream s3;
+  s3 << s1;
+
+  std::ostringstream s;
+  for (const auto &i : ss) {
+    s3 << i;
+  }
+  s << s3.str();
+  return s.str();
+}
+std::string concat2String(const std::string &s1, std::string s2) {
+  return s1 + s2;
+}
 
 //--------- Debug Related end -------------------
 
@@ -65,8 +136,8 @@ unsigned int VIEWPORTX = 0;
 unsigned int VIEWPORTY = 0;
 float VIEWPORTF = 1000.0f;
 float VIEWPORTN = 1.0f;
-unsigned int WINWIDTH = 800;
-unsigned int WINHEIGHT = 600;
+unsigned int WINWIDTH = 384;
+unsigned int WINHEIGHT = 216;
 
 void initializeGLFWMajorMinor(unsigned int maj, unsigned int min) {
   // initialize glfw version with correct profiling etc
@@ -82,29 +153,15 @@ void framebuffer_size_callback(GLFWwindow *window, int newWidth,
                                int newHeight) {
   glViewport(0, 0, newWidth, newHeight);
 }
-
-int launch(const char *winTitle, const char *shaderName) {
+int setWindow(unsigned int w, unsigned int h) {
+  // set window related
   // context initialized
-  initializeGLFWMajorMinor(4, 3);
   // let's get that window going
-  GLFWwindow *window;
-  window = glfwCreateWindow(WINWIDTH, WINHEIGHT, winTitle, NULL, NULL);
-  if (window == NULL) {
-    std::cout << "Failed creating window" << std::endl;
-    return -1;
-  }
-  glfwMakeContextCurrent(window);
-  // window resize
-  glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
-  // load glad
-  if (gladLoadGLLoader((GLADloadproc)(glfwGetProcAddress)) == 0) {
-    std::cout << "Failed to start glad" << std::endl;
-    glfwTerminate();
-    return -1;
-  }
-  gerr();
-  glViewport(0, 0, WINWIDTH, WINHEIGHT);
-  // Texture coords
+  return 0;
+}
+
+void setVertices(GLuint &vao, GLuint &vbo) {
+  // set vertices to vao and vbo for rendering quad
   float vertices[] = {
       // viewport position ||   texture coords
       -1.0f, -1.0f, 0.0f, 0.0f, 0.0f, // bottom left
@@ -112,7 +169,6 @@ int launch(const char *winTitle, const char *shaderName) {
       1.0f,  -1.0f, 0.0f, 1.0f, 0.0f, // top left
       1.0f,  1.0f,  0.0f, 1.0f, 1.0f  // top right
   };
-  GLuint vao, vbo;
   glGenVertexArrays(1, &vao);
   glGenBuffers(1, &vbo);
 
@@ -125,15 +181,12 @@ int launch(const char *winTitle, const char *shaderName) {
   glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
                         (void *)(3 * sizeof(float)));
   glEnableVertexAttribArray(1);
+}
 
-  //
-  // http://antongerdelan.net/opengl/compute.html
-  //
-  // texture handling bit
-  int texture_width = WINWIDTH;
-  int texture_height = WINHEIGHT;
-  GLuint texture_output;
-  glGenTextures(1, &texture_output);
+void setTexture(GLuint texture_output, unsigned int w, unsigned int h) {
+  // set texture related
+  int texture_width = w;
+  int texture_height = h;
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, texture_output);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -147,7 +200,10 @@ int launch(const char *winTitle, const char *shaderName) {
 
   // end texture handling
   gerr();
+}
 
+void computeInfo() {
+  // show compute shader related info
   // work group handling
   // work group count
   GLint work_group_count[3];
@@ -174,56 +230,121 @@ int launch(const char *winTitle, const char *shaderName) {
   glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &work_group_inv);
   std::cout << "max work group invocation: " << work_group_inv << std::endl;
   // end of work group
+}
 
-  // quad shader
-  // source vertex shader
-  filesystem::path vpath = shaderDirPath / "compute.vert";
+Shader makeShader(filesystem::path parent, const char *vertex,
+                  const char *fragment) {
+  filesystem::path vpath = parent / vertex;
   // source fragment shader
-  filesystem::path fpath = shaderDirPath / "compute.frag";
+  filesystem::path fpath = parent / fragment;
   // declare quad program
   Shader quadShader(vpath.c_str(), fpath.c_str());
   gerr();
+  return quadShader;
+}
+Shader makeShader(filesystem::path parent, const char *compute) {
+  // make compute shader
+  filesystem::path cpath = parent / compute;
+  Shader rayShader(cpath.c_str());
+  gerr();
+  return rayShader;
+}
+
+void regularDrawing(GLuint vao, GLuint texture_output, Shader quadShader) {
+  // regular draw commands for rendering quad
+  glClear(GL_COLOR_BUFFER_BIT);
+  gerr();
+  quadShader.useProgram();
+  gerr();
+  glBindVertexArray(vao);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, texture_output);
+  gerr();
+
+  // drawing call
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  gerr();
+  glfwPollEvents();
+}
+
+void manageWindow(GLFWwindow *window) {}
+
+void clear(GLuint vao, GLuint vbo) {
+  glDeleteVertexArrays(1, &vao);
+  glDeleteBuffers(1, &vbo);
+  glfwTerminate();
+}
+
+int launch(const char *winTitle, const char *shaderName) {
+  // set window
+  initializeGLFWMajorMinor(4, 3);
+
+  GLFWwindow *window;
+  window = glfwCreateWindow(WINWIDTH, WINHEIGHT, winTitle, NULL, NULL);
+  if (window == NULL) {
+    std::cout << "Failed creating window" << std::endl;
+    return -1;
+  }
+  glfwMakeContextCurrent(window);
+  // window resize
+  glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+  glfwMakeContextCurrent(window);
+  // window resize
+  glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+  if (gladLoadGLLoader((GLADloadproc)(glfwGetProcAddress)) == 0) {
+    std::cout << "Failed to start glad" << std::endl;
+    glfwTerminate();
+    return -1;
+  }
+  gerr();
+  glViewport(0, 0, WINWIDTH, WINHEIGHT);
+
+  // load glad
+  // set vao and vbo
+  GLuint vao, vbo;
+  setVertices(vao, vbo);
+
+  //
+  // http://antongerdelan.net/opengl/compute.html
+  //
+  // texture handling bit
+  GLuint texture_output;
+  glGenTextures(1, &texture_output);
+  setTexture(texture_output, WINWIDTH, WINHEIGHT);
+
+  // compute shader related info
+  computeInfo();
+
+  // quad shader
+  // source vertex shader
+  Shader quadShader = makeShader(shaderDirPath, "compute.vert", "compute.frag");
   // end quad shader
 
   // compute shader part
-  filesystem::path cpath = shaderDirPath / shaderName;
-  Shader rayShader(cpath.c_str());
-  gerr();
-
-  // declare shaders
+  Shader rayShader = makeShader(shaderDirPath, shaderName);
 
   while (glfwWindowShouldClose(window) == 0) {
     // rendering call
     // launch shaders
     rayShader.useProgram();
     gerr();
-    glDispatchCompute((GLuint)texture_width, (GLuint)texture_height, 1);
+    glDispatchCompute((GLuint)WINWIDTH, (GLuint)WINHEIGHT, 1);
     gerr();
     // end launch shaders
 
     // writting is finished
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-    glClear(GL_COLOR_BUFFER_BIT);
-    gerr();
-    quadShader.useProgram();
-    gerr();
-    glBindVertexArray(vao);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture_output);
-    gerr();
+    // start rendering quad
+    regularDrawing(vao, texture_output, quadShader);
 
-    // drawing call
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    gerr();
-    glfwPollEvents();
+    manageWindow(window);
     if (GLFW_PRESS == glfwGetKey(window, GLFW_KEY_ESCAPE)) {
       glfwSetWindowShouldClose(window, 1);
     }
     glfwSwapBuffers(window);
   }
-  glDeleteVertexArrays(1, &vao);
-  glDeleteBuffers(1, &vbo);
-  glfwTerminate();
+  clear(vao, vbo);
   return 0;
 }
+#endif

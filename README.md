@@ -65,7 +65,12 @@ function.
 - The executable `compute01.out` should give you this: ![compute01
   output](bin/media/screenshots/compute01.png?raw=true  "compute01.comp output")
 
-- The executable `compute02.out` should give you this: ![compute01
+- The executable `compute02.out` should give you this: ![compute02
   output](bin/media/screenshots/compute02.png?raw=true  "compute02.comp output")
 
+- The executable `compute03.out` should give you this: ![compute03
+  output](bin/media/screenshots/compute02.png?raw=true  "compute03.comp output")
+
+- The executable `compute04.out` should give you this: ![compute04
+  output](bin/media/screenshots/compute02.png?raw=true  "compute04.comp output")
 

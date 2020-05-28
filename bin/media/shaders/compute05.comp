@@ -1,0 +1,674 @@
+#version 430
+layout(local_size_x = 1, local_size_y = 1) in; // local work_group_size
+#define SCENE_OBJECT_NB 3
+layout(rgba32f, binding = 0) uniform image2D img_output;
+// internal format of the image same as glTexImage2D
+//
+// uniform int max_depth;
+// uniform int pixel_sample;
+// layout(std140, binding = 2) uniform camera_vals {
+// vec4 camPosU;    // pos
+// vec4 targetU;    // target
+// vec4 vupU;       // vup
+// float vfov;      // vfov
+// float aperature; // 2.0
+//};
+
+// start constants
+// constants.hpp
+float PI = 3.1415926535;
+float INFINITY = 1.0 / 0.0;
+// end constants
+//
+// --------------------- utility functions ------------------------------
+float degree_to_radian(float degree) {
+  //
+  return degree * PI / 180.0;
+}
+float rand(vec2 co) {
+  // random gen
+  float a = 12.9898;
+  float b = 78.233;
+  float c = 43758.5453;
+  float dt = dot(co.xy, vec2(a, b));
+  float sn = mod(dt, 3.14);
+  return fract(sin(sn) * c);
+}
+float random_double() {
+  // random double
+  return rand(vec2(0.0, 1.0));
+}
+float random_double(float mi, float mx) {
+  // random double
+  return rand(vec2(mi, mx));
+}
+int random_int(int mi, int mx) { return int(random_double(mi, mx)); }
+vec3 random_vec() {
+  // random vector
+  return vec3(random_double(), random_double(), random_double());
+}
+vec3 random_vec(float mi, float ma) {
+  // random vector in given seed
+  return vec3(random_double(mi, ma), random_double(mi, ma),
+              random_double(mi, ma));
+}
+vec3 random_in_unit_sphere() {
+  // random in unit sphere
+  while (true) {
+    //
+    vec3 v = random_vec(-1, 1);
+    if (dot(v, v) >= 1) {
+      continue;
+    }
+    return v;
+  }
+}
+vec3 random_unit_vector() {
+  // unit vector
+  float a = random_double(0, 2 * PI);
+  float z = random_double(-1, 1);
+  float r = sqrt(1 - z * z);
+  return vec3(r * cos(a), r * sin(a), z);
+}
+vec3 random_in_hemisphere(vec3 normal) {
+  // normal ekseninde dagilan yon
+  vec3 unit_sphere_dir = random_in_unit_sphere();
+  if (dot(unit_sphere_dir, normal) > 0.0) {
+    return unit_sphere_dir;
+  } else {
+    return -1 * unit_sphere_dir;
+  }
+}
+vec3 random_in_unit_disk() {
+  // lens yakinsamasi için gerekli
+  while (true) {
+    vec3 point = vec3(random_double(-1, 1), random_double(-1, 1), 0);
+    if (dot(point, point) >= 1) {
+      continue;
+    }
+    return point;
+  }
+}
+vec3 refract_vec(vec3 uv, vec3 normal, float eta_over) {
+  //
+  float cos_theta = dot(-uv, normal);
+  vec3 outpar = eta_over * (uv + (cos_theta * normal));
+  vec3 out_prep = -sqrt(1.0 - dot(outpar, outpar)) * normal;
+  return outpar + out_prep;
+}
+
+vec3 fix_color(vec3 pcolor, int samples_per_pixel) {
+  float r, g, b;
+  r = pcolor.x;
+  g = pcolor.y;
+  b = pcolor.z;
+  // scale sample
+  r = sqrt(r / samples_per_pixel);
+  g = sqrt(g / samples_per_pixel);
+  b = sqrt(b / samples_per_pixel);
+  return vec3(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0));
+}
+
+// --------------------- utility functions end --------------------------
+
+//
+struct Ray {
+  vec3 origin;
+  vec3 direction;
+};
+Ray makeRay(vec3 orig, vec3 dir) {
+  Ray r;
+  r.origin = orig;
+  r.direction = dir;
+  return r;
+}
+
+vec3 at(Ray r, float dist) { return r.direction * dist + r.origin; }
+
+// --------------------- start aabb.hpp -----------------------
+
+struct Aabb {
+  vec3 minp;
+  vec3 maxp;
+};
+
+Aabb makeAabb(vec3 mi, vec3 ma) {
+  Aabb ab;
+  ab.minp = mi;
+  ab.maxp = ma;
+  return ab;
+}
+bool hitAabb(in Aabb ab, Ray r, in float tmin, in float tmax) {
+  // check if aabb is hit
+  for (int i = 0; i < 3; i++) {
+    float mindiff = ab.minp[i] - r.origin[i];
+    mindiff /= r.direction[i];
+    float maxdiff = ab.maxp[i] - r.origin[i];
+    maxdiff /= r.direction[i];
+
+    float t0 = min(mindiff, maxdiff);
+    float t1 = max(mindiff, maxdiff);
+    float tmin2 = min(t0, tmin);
+    float tmax2 = max(t1, tmax);
+
+    if (tmax2 <= tmin2) {
+      return false;
+    }
+    return true;
+  }
+}
+
+// -------------------- end aabb.hpp ---------------------
+
+struct Material;
+struct HitRecord {
+  vec3 point;
+  vec3 normal;
+  float dist;
+  bool front_face;
+  Material mat_ptr;
+};
+HitRecord makeRecord(vec3 p, vec3 n, float d, bool ff, Material mat) {
+  HitRecord rec;
+  rec.point = p;
+  rec.normal = n;
+  rec.dist = d;
+  rec.front_face = ff;
+  rec.mat_ptr = mat;
+  return rec;
+}
+
+void set_face_normal(inout HitRecord rec, in Ray r, in vec3 out_normal) {
+  // set face normal to hit record did we hit front or back
+  rec.front_face = dot(r.direction, out_normal) < 0;
+  rec.normal = (rec.front_face) ? out_normal : -1 * out_normal;
+}
+// -------------------- start aabb.hpp ---------------------
+
+// ---------------------- start material.hpp ---------------------------
+struct Lambert {
+  vec3 albedo;
+};
+
+Lambert makeLambert(vec3 clr) {
+  Lambert lam;
+  lam.albedo = clr;
+  return lam;
+}
+
+bool scatterLambert(Lambert lam, in Ray ray_in, in HitRecord record,
+                    inout vec3 attenuation, inout Ray ray_out) {
+
+  // isik kirilsin mi kirilmasin mi
+  vec3 out_dir = record.normal + random_unit_vector();
+  ray_out = makeRay(record.point, out_dir);
+  attenuation = lam.albedo;
+  return true;
+}
+
+struct Metal {
+  vec3 albedo;
+  float roughness;
+};
+Metal makeMetal(vec3 alb, float fuzz) {
+  Metal m;
+  m.albedo = alb;
+  m.roughness = fuzz;
+  return m;
+}
+bool scatterMetal(Metal met, in Ray ray_in, in HitRecord record,
+                  inout vec3 attenuation, inout Ray ray_out) {
+
+  vec3 unit_in_dir = normalize(ray_in.direction);
+  vec3 out_dir = reflect(unit_in_dir, record.normal);
+  ray_out =
+      makeRay(record.point, out_dir + met.roughness * random_in_unit_sphere());
+  attenuation = met.albedo;
+  return dot(ray_out.direction, record.normal) > 0.0;
+}
+
+struct Dielectric {
+  float ref_idx;
+};
+
+Dielectric makeDielectric(float rfidx) {
+  Dielectric die;
+  die.ref_idx = rfidx;
+  return die;
+}
+
+float fresnelCT(float costheta, float ridx) {
+  // cook torrence fresnel equation
+  float etao = 1 + sqrt(ridx);
+  float etau = 1 - sqrt(ridx);
+  float eta = etao / etau;
+  float g = sqrt(pow(eta, 2) + pow(costheta, 2) - 1);
+  float g_c = g - costheta;
+  float gplusc = g + costheta;
+  float gplus_cc = (gplusc * costheta) - 1;
+  float g_cc = (g_c * costheta) + 1;
+  float oneplus_gcc = 1 + pow(gplus_cc / g_cc, 2);
+  float half_plus_minus = 0.5 * pow(g_c / gplusc, 2);
+  return half_plus_minus * oneplus_gcc;
+}
+float fresnelSchlick(float costheta, float ridx) {
+  //
+  float r0 = (1 - ridx) / (1 + ridx);
+  r0 = r0 * r0;
+  return r0 + (1 - r0) * pow((1 - costheta), 5);
+}
+float get_fresnel(float costheta, float ridx, int choice = 0) {
+  // compute freshnel
+  float fresnel;
+  switch (choice) {
+  case 0:
+    fresnel = fresnelSchlick(costheta, ridx);
+    break;
+  case 1:
+    fresnel = fresnelCT(costheta, ridx);
+    break;
+  default:
+    fresnel = fresnelSchlick(costheta, ridx);
+    break;
+  }
+  return fresnel;
+}
+
+bool scatterDielectric(Dielectric diel, in Ray r_in, in HitRecord record,
+                       inout vec3 attenuation, inout Ray r_out) {
+  // ray out
+  attenuation = vec3(1.0);
+  vec3 unit_in_dir = normalize(r_in.direction);
+  float eta_over = record.front_face ? 1.0 / diel.ref_idx : diel.ref_idx;
+  float costheta = min(dot(-1 * unit_in_dir, record.normal), 1.0);
+  float sintheta = sqrt(1.0 - costheta * costheta);
+  vec3 ref;
+  if (eta_over * sintheta > 1.0) {
+    //
+    ref = reflect(unit_in_dir, record.normal);
+    r_out = makeRay(record.point, ref);
+    return true;
+  }
+  //
+  double fresnel_term = get_fresnel(costheta, eta_over);
+  if (random_double() < fresnel_term) {
+    ref = reflect(unit_in_dir, record.normal);
+    r_out = makeRay(record.point, ref);
+    return true;
+  }
+  ref = refract_vec(unit_in_dir, record.normal, eta_over);
+  r_out = makeRay(record.point, ref);
+  return true;
+}
+
+struct Material {
+  int type; // 0: lambert, 1: metal, 2: dielectric;
+  Lambert lam;
+  Metal met;
+  Dielectric die;
+};
+
+bool scatter(in Material mat_ptr, in Ray ray_in, in HitRecord record,
+             out vec3 attenuation, out Ray ray_out) {
+  // scatter material
+  if (mat_ptr.type == 0) {
+    return scatterLambert(mat_ptr.lam, ray_in, record, attenuation, ray_out);
+  } else if (mat_ptr.type == 1) {
+    return scatterMetal(mat_ptr.met, ray_in, record, attenuation, ray_out);
+  } else if (mat_ptr.type == 2) {
+    return scatterDielectric(mat_ptr.die, ray_in, record, attenuation, ray_out);
+  } else {
+    return false;
+  }
+}
+// --------------------------- end material ------------------------------
+
+struct Camera {
+  vec3 lower_left_corner;
+  vec3 origin;
+  vec3 vertical;
+  vec3 horizontal;
+  vec3 u;
+  vec3 v;
+  vec3 w;
+  float lens_radius;
+};
+
+Camera makeCamera(vec3 pos, vec3 target, vec3 up, float vfov,
+                  float aspect_ratio, float aperture, float focus_dist) {
+  // make camera struct
+  Camera cam;
+  cam.origin = pos;
+  cam.lens_radius = aperture / 2;
+
+  float theta = degree_to_radian(vfov);
+  float half_height = tan(theta / 2);
+  half_height *= 2.0;
+  float half_width = aspect_ratio * half_height;
+
+  // w, v, u eksenleri
+  cam.w = normalize(pos - target);
+  cam.u = normalize(cross(up, cam.w));
+  cam.v = cross(cam.w, cam.u);
+
+  cam.horizontal = half_width * focus_dist * cam.u;
+  cam.vertical = half_height * focus_dist * cam.v;
+
+  cam.lower_left_corner =
+      cam.origin - cam.horizontal / 2 - cam.vertical / 2 - cam.w * focus_dist;
+  return cam;
+}
+
+Ray get_ray(Camera ca, float u, float v) {
+  // get camera ray
+  vec3 rd = ca.lens_radius * random_in_unit_disk();
+  vec3 offst = ca.u * rd.x + ca.v * rd.y;
+  vec3 r_origin = ca.origin + offst;
+  vec3 r_dir =
+      ca.lower_left_corner + (u * ca.horizontal) + (v * ca.vertical) - r_origin;
+  return makeRay(r_origin, r_dir);
+}
+
+struct Sphere {
+  vec3 center;
+  float radius;
+  Material mat_ptr;
+};
+
+Sphere makeSphere(vec3 cent, float r, Material mat) {
+  Sphere sp;
+  sp.center = cent;
+  sp.radius = r;
+  sp.mat_ptr = mat;
+  return sp;
+}
+
+bool hitSphere(in Sphere s, in Ray r, float dist_min, float dist_max,
+               inout HitRecord record) {
+  // kureye isin vurdu mu onu test eden fonksiyon
+  vec3 origin_to_center = r.origin - s.center;
+  float a = dot(r.direction, r.direction);
+  float half_b = dot(origin_to_center, r.direction);
+  float c = dot(origin_to_center, origin_to_center) - s.radius * s.radius;
+  float isHit = half_b * half_b - a * c;
+  float margin;
+  if (isHit > 0) {
+    float root = sqrt(isHit);
+    margin = (-1 * half_b - root) / a;
+    if (margin < dist_max && margin > dist_min) {
+      record.dist = margin;
+      record.point = at(r, record.dist);
+      vec3 out_normal = (record.point - s.center) / s.radius;
+      set_face_normal(record, r, out_normal);
+      record.mat_ptr = s.mat_ptr;
+      return true;
+    }
+    margin = (-1 * half_b + root) / a;
+    if (margin < dist_max && margin > dist_min) {
+      record.dist = margin;
+      record.point = at(r, record.dist);
+      vec3 out_normal = (record.point - s.center) / s.radius;
+      set_face_normal(record, r, out_normal);
+      record.mat_ptr = s.mat_ptr;
+      return true;
+    }
+  }
+  return false;
+}
+bool sphere_bounding_box(in Sphere s, float t0, float t1, out Aabb output_box) {
+  //
+  output_box = makeAabb(s.center - vec3(s.radius), s.center + vec3(s.radius));
+  return true;
+}
+
+struct SceneObj {
+  int type; // 0 sphere, 1, other
+  Sphere sp;
+};
+
+bool scene_obj_bounding_box(in SceneObj s, float t0, float t1,
+                            out Aabb output_box) {
+  if (s.type == 0) {
+    return sphere_bounding_box(s.sp, t0, t1, output_box);
+  }
+  return false;
+}
+
+struct Scene {
+  SceneObj ss[SCENE_OBJECT_NB];
+  bool isEmpty;
+};
+
+Scene sliceScene(in Scene scn, int s, int e) {
+  // slice scene
+  Scene sout;
+  if ((s < 0) || (e > SCENE_OBJECT_NB)) {
+    sout.isEmpty = true;
+    return sout;
+  }
+  int k = 0;
+  for (int i = s; i < e; i++) {
+    sout.ss[k] = scn.ss[i];
+    k += 1;
+  }
+  sout.isEmpty = false;
+  return sout;
+}
+
+bool hit_scene(in Scene scene, in Ray r, float dmin, float dmax,
+               inout HitRecord record) {
+  // check if sphere is hit
+  HitRecord temp;
+  bool hit_ = false;
+  float current_closest = dmax;
+  for (int i = 0; i < SCENE_OBJECT_NB; i++) {
+    SceneObj sobj = scene.ss[i];
+    if (sobj.type == 0) {
+      if (hitSphere(sobj.sp, r, dmin, dmax, temp)) {
+        hit_ = true;
+        current_closest = temp.dist;
+        record = temp;
+      }
+    }
+  }
+  return hit_;
+}
+Aabb surround_box(Aabb b1, Aabb b2) {
+  //
+  vec3 surround_min = vec3(min(b1.minp.x, b2.minp.x), min(b1.minp.y, b2.minp.y),
+                           min(b1.minp.z, b2.minp.z));
+  vec3 surround_max = vec3(max(b1.maxp.x, b2.maxp.x), max(b1.maxp.y, b2.maxp.y),
+                           max(b1.maxp.z, b2.maxp.z));
+  return makeAabb(surround_min, surround_max);
+}
+
+bool scene_bounding_box(in Scene scene, float t0, float t1,
+                        out Aabb output_box) {
+  if (scene.ss.length() == 0) {
+    return false;
+  }
+  Aabb tempBox;
+  bool first = true;
+  for (int i = 0; i < SCENE_OBJECT_NB; i++) {
+    SceneObj sobj = scene.ss[i];
+    if (sobj.type == 0) { // if sphere
+      if (sphere_bounding_box(sobj.sp, t0, t1, output_box) == false) {
+        return false;
+      }
+      output_box = (first) ? tempBox : surround_box(output_box, tempBox);
+      first = false;
+    }
+  }
+  return true;
+}
+
+bool compareBox(SceneObj s1, SceneObj s2, int axis) {
+  // compare boxes based on axis
+  Aabb b1, b2;
+  if ((scene_obj_bounding_box(s1, 0, 0, b1) == false) ||
+      (scene_obj_bounding_box(s2, 0, 0, b2) == false)) {
+    //
+    // int i = 13;
+    // int k = 11;
+    // float dummy = i / k;
+  }
+  return b1.minp[axis] < b2.minp[axis];
+}
+
+bool compareBoxX(SceneObj s1, SceneObj s2) { return compareBox(s1, s2, 0); };
+bool compareBoxY(SceneObj s1, SceneObj s2) { return compareBox(s1, s2, 1); };
+
+bool compareBoxZ(SceneObj s1, SceneObj s2) { return compareBox(s1, s2, 2); };
+
+Scene sortScene(Scene scn, int axis) {
+  // sort scene using insertion sort
+  for (int i = 1; i < SCENE_OBJECT_NB; i++) {
+    int j = i - 0;
+    SceneObj s = scn.ss[i];
+    while ((j >= 0) && (compareBox(s, scn.ss[j], axis))) {
+      scn.ss[j + 1] = scn.ss[j];
+      j -= 1;
+    }
+    scn.ss[j + 1] = s;
+  }
+  return scn;
+}
+
+// ------------------------ end bvh.hpp -------------------------
+
+vec3 make_color(in Ray r, in Scene scene, inout bool isScattered, out Ray r_out,
+                in int bounceNb) {
+  // produce color if ray hits scene
+  if (bounceNb <= 0) {
+    return vec3(0);
+  }
+  HitRecord rec;
+  if (hit_scene(scene, r, 0.001, INFINITY, rec)) {
+    vec3 atten;
+    if (scatter(rec.mat_ptr, r, rec, atten, r_out) == true) {
+      isScattered = true;
+      return atten;
+    }
+    isScattered = false;
+    return vec3(0);
+  } else {
+    vec3 dir = normalize(r.direction);
+    float temp = 0.5 * (dir.y + 1.0);
+    isScattered = false;
+    return (1.0 - temp) * vec3(1.0) + temp * vec3(0.5, 0.7, 1.0);
+  }
+}
+
+vec3 ray_color(in Ray r, in Scene scene, int depth) {
+  //
+  HitRecord rec;
+  Ray r_in;
+  r_in.origin = r.origin;
+  r_in.direction = r.direction;
+  vec3 bcolor = vec3(1);
+  for (int i = 0; i < depth; i++) {
+    bool isScattered;
+    Ray r_out;
+    vec3 cval = make_color(r_in, scene, isScattered, r_out, depth - i);
+    if (isScattered == true) {
+      r_in = r_out;
+    } else {
+      // break;
+    }
+    bcolor *= cval;
+  }
+  return bcolor;
+}
+
+void main() {
+  // index of global work group
+  vec4 pixel = vec4(0.0, 0.0, 0.0, 1.0);
+  ivec2 pixel_index = ivec2(gl_GlobalInvocationID.xy);
+  ivec2 img_dims = imageSize(img_output); // image dimensions
+  int imwidth = img_dims.x;
+  int imheight = img_dims.y;
+  float aspect_ratio = float(imwidth) / imheight;
+  int i = pixel_index.x;
+  int j = pixel_index.y;
+  // int mdepth = max_depth;     // 5
+  // int psample = pixel_sample; // 10
+  int mdepth = 5;   // 5
+  int psample = 10; // 10
+
+  // -------------- declare objects ---------------
+
+  Scene scene;
+  Material m1, m2, m3, m4;
+  m1.lam = makeLambert(vec3(0.1, 0.2, 0.5));
+  m1.type = 0;
+  m2.lam = makeLambert(vec3(0.8, 0.8, 0.0));
+  m2.type = 0;
+
+  m3.type = 1;
+  m3.met = makeMetal(vec3(0.8, 0.6, 0.2), 0.0);
+
+  m4.type = 2;
+  m4.die = makeDielectric(1.5);
+
+  SceneObj s10, s20, s30; // s40, s50;
+  s10.type = 0;
+  s20.type = 0;
+  s30.type = 0;
+  // s40.type = 0;
+  // s50.type = 0;
+  Sphere s1 = makeSphere(vec3(0, -100.5, -1), 100, m2);
+  Sphere s2 = makeSphere(vec3(0, 0, -1), 0.5, m1);
+  Sphere s3 = makeSphere(vec3(1, 0, -1), 0.5, m3);
+  // Sphere s4 = makeSphere(vec3(-1, 0, -1), 0.5, m4);
+  // Sphere s5 = makeSphere(vec3(-1, 0, -1), -0.45, m4);
+  s10.sp = s1;
+  s20.sp = s2;
+  s30.sp = s3;
+  // s40.sp = s4;
+  // s50.sp = s5;
+  scene.ss[2] = s10;
+  scene.ss[0] = s20;
+  scene.ss[1] = s30;
+  // scene.ss[3] = s40;
+  // scene.ss[0] = s50;
+
+  //
+  //
+  // -------------- declare objects end -----------
+  //
+  // Camera cam = {vec3(-2, -1, -1), vec3(0, 0, 0), vec3(0, 2, 0), vec3(4, 0,
+  // 0)};
+  vec3 camPos = vec3(-1, 2, 1);
+  vec3 target = vec3(0, 0, -1);
+  vec3 vup = vec3(0, 1, 0);
+  float vfovv = 20;
+  float aperaturev = 2.0;
+  // Camera cam = makeCamera(camPosU.xyz, // pos
+  //                        targetU.xyz, // target
+  //                        vupU.xyz,    // vup
+  //                        vfov,        // vfov
+  //                        aspect_ratio,
+  //                        aperature, // aperature
+  //                        length(camPosU.xyz - targetU.xyz));
+  Camera cam = makeCamera(camPos, // pos
+                          target, // target
+                          vup,    // vup
+                          vfovv,  // vfov
+                          aspect_ratio,
+                          aperaturev, // aperature
+                          length(camPos - target));
+
+  vec3 rcolor = vec3(0);
+
+  for (int k = 0; k < psample; k++) {
+
+    float u = float(i + random_double()) / (imwidth - 1);
+    float v = float(j + random_double()) / (imheight - 1);
+    Ray r = get_ray(cam, u, v);
+    rcolor += ray_color(r, scene, mdepth);
+  }
+  rcolor = fix_color(rcolor, psample);
+
+  // output specific pixel in the image
+  imageStore(img_output, pixel_index, vec4(rcolor, 1.0));
+}

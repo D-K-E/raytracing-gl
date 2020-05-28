@@ -36,12 +36,15 @@ void checkShaderProgramCompilation(GLuint program) {
               << infoLog << std::endl;
   }
 }
-
-void checkUniformLocation(int locVal, std::string uniName) {
+void checkUniformLocation(int locVal, const char *uniName) {
   if (locVal == -1) {
     std::cout << "Shader program can not find the uniform location for "
               << uniName << std::endl;
   }
+}
+
+void checkUniformLocation(int locVal, const std::string &uniName) {
+  checkUniformLocation(locVal, uniName.c_str());
 }
 
 class Shader {
@@ -58,17 +61,27 @@ public:
   void useProgram();
 
   // utility functions for setting uniforms
+  void setBoolUni(const char *name, bool value) const {
+    // set boolean value to given uniform name
+    int uniLocation = glGetUniformLocation(programId, name);
+    checkUniformLocation(uniLocation, name);
+    glUniform1i(uniLocation, static_cast<int>(value));
+  };
+
   void setBoolUni(const std::string &name, bool value) const {
     // set boolean value to given uniform name
-    int uniLocation = glGetUniformLocation(this->programId, name.c_str());
-    checkUniformLocation(uniLocation, name);
-    glUniform1i(uniLocation, (int)value);
+    setBoolUni(name.c_str(), value);
   };
-  void setIntUni(const std::string &name, int value) const {
+  void setIntUni(const char *name, int value) const {
     // set boolean value to given uniform name
-    int uniLocation = glGetUniformLocation(this->programId, name.c_str());
+    int uniLocation = glGetUniformLocation(programId, name);
     checkUniformLocation(uniLocation, name);
     glUniform1i(uniLocation, value);
+  };
+
+  void setIntUni(const std::string &name, int value) const {
+    // set boolean value to given uniform name
+    setIntUni(name.c_str(), value);
   };
   void setFloatUni(const std::string &name, float value) const {
     // set boolean value to given uniform name
