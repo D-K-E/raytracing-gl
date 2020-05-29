@@ -74,3 +74,6 @@ function.
 - The executable `compute04.out` should give you this: ![compute04
   output](bin/media/screenshots/compute04.png?raw=true  "compute04.comp output")
 
+- The executable `compute05.out` should give you this:
+  <img src="bin/media/screenshots/compute05.png" width="320" height="180"/>
+

@@ -197,6 +197,7 @@ void setTexture(GLuint texture_output, unsigned int w, unsigned int h) {
                GL_RGBA, GL_FLOAT, NULL);
   glBindImageTexture(0, texture_output, 0, GL_FALSE, 0, GL_WRITE_ONLY,
                      GL_RGBA32F);
+  glBindTexture(GL_TEXTURE_2D, 0); // unbind
 
   // end texture handling
   gerr();

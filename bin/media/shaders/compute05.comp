@@ -1,18 +1,8 @@
 #version 430
 layout(local_size_x = 1, local_size_y = 1) in; // local work_group_size
-#define SCENE_OBJECT_NB 3
-layout(rgba32f, binding = 0) uniform image2D img_output;
-// internal format of the image same as glTexImage2D
-//
-// uniform int max_depth;
-// uniform int pixel_sample;
-// layout(std140, binding = 2) uniform camera_vals {
-// vec4 camPosU;    // pos
-// vec4 targetU;    // target
-// vec4 vupU;       // vup
-// float vfov;      // vfov
-// float aperature; // 2.0
-//};
+#define SCENE_OBJECT_NB 2
+layout(rgba32f, location = 0, binding = 0) writeonly uniform image2D img_output;
+layout(rgba32f, location = 1, binding = 1) readonly uniform image2D in_image;
 
 // start constants
 // constants.hpp
@@ -31,7 +21,7 @@ float rand(vec2 co) {
   float b = 78.233;
   float c = 43758.5453;
   float dt = dot(co.xy, vec2(a, b));
-  float sn = mod(dt, 3.14);
+  float sn = mod(dt, PI);
   return fract(sin(sn) * c);
 }
 float random_double() {
@@ -56,8 +46,8 @@ vec3 random_in_unit_sphere() {
   // random in unit sphere
   while (true) {
     //
-    vec3 v = random_vec(-1, 1);
-    if (dot(v, v) >= 1) {
+    vec3 v = random_vec(-1.0, 1.0);
+    if (dot(v, v) >= 1.0) {
       continue;
     }
     return v;
@@ -97,16 +87,24 @@ vec3 refract_vec(vec3 uv, vec3 normal, float eta_over) {
   return outpar + out_prep;
 }
 
+vec3 mixv(float mi, float ma, vec3 val) {
+  //
+  return vec3(mix(mi, ma, val.x), mix(mi, ma, val.y), mix(mi, ma, val.z));
+}
+
 vec3 fix_color(vec3 pcolor, int samples_per_pixel) {
-  float r, g, b;
-  r = pcolor.x;
-  g = pcolor.y;
-  b = pcolor.z;
   // scale sample
-  r = sqrt(r / samples_per_pixel);
-  g = sqrt(g / samples_per_pixel);
-  b = sqrt(b / samples_per_pixel);
-  return vec3(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0));
+  pcolor /= samples_per_pixel;
+  return clamp(sqrt(pcolor), 0.0, 0.999);
+  // return mixv(0.0, 0.999, sqrt(pcolor));
+}
+
+void get_sphere_uv(in vec3 p, out float u, out float v) {
+  //
+  float phi = atan(p.z, p.x);
+  float theta = asin(p.y);
+  u = 1 - (phi + PI) / (2 * PI);
+  v = (theta + PI / 2) / PI;
 }
 
 // --------------------- utility functions end --------------------------
@@ -125,47 +123,13 @@ Ray makeRay(vec3 orig, vec3 dir) {
 
 vec3 at(Ray r, float dist) { return r.direction * dist + r.origin; }
 
-// --------------------- start aabb.hpp -----------------------
-
-struct Aabb {
-  vec3 minp;
-  vec3 maxp;
-};
-
-Aabb makeAabb(vec3 mi, vec3 ma) {
-  Aabb ab;
-  ab.minp = mi;
-  ab.maxp = ma;
-  return ab;
-}
-bool hitAabb(in Aabb ab, Ray r, in float tmin, in float tmax) {
-  // check if aabb is hit
-  for (int i = 0; i < 3; i++) {
-    float mindiff = ab.minp[i] - r.origin[i];
-    mindiff /= r.direction[i];
-    float maxdiff = ab.maxp[i] - r.origin[i];
-    maxdiff /= r.direction[i];
-
-    float t0 = min(mindiff, maxdiff);
-    float t1 = max(mindiff, maxdiff);
-    float tmin2 = min(t0, tmin);
-    float tmax2 = max(t1, tmax);
-
-    if (tmax2 <= tmin2) {
-      return false;
-    }
-    return true;
-  }
-}
-
-// -------------------- end aabb.hpp ---------------------
-
 struct Material;
 struct HitRecord {
   vec3 point;
   vec3 normal;
   float dist;
   bool front_face;
+  float u, v;
   Material mat_ptr;
 };
 HitRecord makeRecord(vec3 p, vec3 n, float d, bool ff, Material mat) {
@@ -177,32 +141,116 @@ HitRecord makeRecord(vec3 p, vec3 n, float d, bool ff, Material mat) {
   rec.mat_ptr = mat;
   return rec;
 }
-
 void set_face_normal(inout HitRecord rec, in Ray r, in vec3 out_normal) {
   // set face normal to hit record did we hit front or back
   rec.front_face = dot(r.direction, out_normal) < 0;
   rec.normal = (rec.front_face) ? out_normal : -1 * out_normal;
 }
-// -------------------- start aabb.hpp ---------------------
+
+HitRecord makeRecord(vec3 p, vec3 n, float d, bool ff) {
+  HitRecord rec;
+  rec.point = p;
+  rec.normal = n;
+  rec.dist = d;
+  rec.front_face = ff;
+  return rec;
+}
+// ----------------- texture.hpp --------------------------
+struct SolidTexture {
+  vec3 color;
+};
+SolidTexture makeSolidTexture(vec3 c) {
+  SolidTexture s;
+  s.color = c;
+  return s;
+}
+vec3 solidValue(SolidTexture s, float u, float v, in vec3 p) { return s.color; }
+
+struct CheckeredTexture {
+  SolidTexture odd;
+  SolidTexture even;
+};
+CheckeredTexture makeCheckered(SolidTexture s1, SolidTexture s2) {
+  CheckeredTexture c;
+  c.odd = s1;
+  c.even = s2;
+  return c;
+}
+vec3 checkeredValue(CheckeredTexture c, float u, float v, in vec3 p) {
+  //
+  float sines = sin(10 * p.x) * sin(10 * p.y) * sin(10 * p.z);
+  if (sines < 0)
+    return solidValue(c.odd, u, v, p);
+  else
+    return solidValue(c.even, u, v, p);
+}
+
+struct ImageTexture {
+  int width;
+  int height;
+};
+
+ImageTexture makeImageTexture() {
+  ImageTexture im;
+  ivec2 img_dims = imageSize(in_image); // image dimensions
+  im.width = img_dims.x;
+  im.height = img_dims.y;
+  return im;
+}
+
+vec3 imageValue(ImageTexture im, float u, float v, in vec3 p) {
+  u = clamp(u, 0.0, 1.0);
+  v = 1 - clamp(v, 0.0, 1.0);
+  int i = int(u * im.width);
+  int j = int(v * im.height);
+  if (i >= im.width) {
+    i = im.width - 1;
+  }
+  if (j >= im.height) {
+    j = im.height - 1;
+  }
+  vec3 color = imageLoad(in_image, ivec2(i, j)).xyz;
+  if (color == vec3(0)) {
+    color = vec3(0, u, v);
+  }
+  return color;
+}
+struct Texture {
+  int type; // 0 solid, 1 checkered, 2 image
+  SolidTexture solid;
+  CheckeredTexture checkered;
+  ImageTexture img;
+};
+vec3 textureValue(Texture t, float u, float v, in vec3 p) {
+  //
+  if (t.type == 0) {
+    return solidValue(t.solid, u, v, p);
+  } else if (t.type == 1) {
+    return checkeredValue(t.checkered, u, v, p);
+  } else if (t.type == 2) {
+    return imageValue(t.img, u, v, p);
+  }
+}
+//----------------- end texture.hpp -----------------------
 
 // ---------------------- start material.hpp ---------------------------
 struct Lambert {
-  vec3 albedo;
+  Texture albedo;
 };
 
-Lambert makeLambert(vec3 clr) {
+Lambert makeLambert(Texture t) {
   Lambert lam;
-  lam.albedo = clr;
+  lam.albedo = t;
   return lam;
 }
 
 bool scatterLambert(Lambert lam, in Ray ray_in, in HitRecord record,
-                    inout vec3 attenuation, inout Ray ray_out) {
+                    out vec3 attenuation, out Ray ray_out) {
 
   // isik kirilsin mi kirilmasin mi
   vec3 out_dir = record.normal + random_unit_vector();
   ray_out = makeRay(record.point, out_dir);
-  attenuation = lam.albedo;
+  attenuation = textureValue(lam.albedo, record.u, record.v, record.point);
   return true;
 }
 
@@ -322,7 +370,7 @@ bool scatter(in Material mat_ptr, in Ray ray_in, in HitRecord record,
   }
 }
 // --------------------------- end material ------------------------------
-
+// --------------------------- start camera.hpp --------------------------
 struct Camera {
   vec3 lower_left_corner;
   vec3 origin;
@@ -332,13 +380,18 @@ struct Camera {
   vec3 v;
   vec3 w;
   float lens_radius;
+  float time0; // shutter open time
+  float time1; // shutter close time
 };
 
 Camera makeCamera(vec3 pos, vec3 target, vec3 up, float vfov,
-                  float aspect_ratio, float aperture, float focus_dist) {
+                  float aspect_ratio, float aperture, float focus_dist,
+                  float t0, float t1) {
   // make camera struct
   Camera cam;
   cam.origin = pos;
+  cam.time0 = t0;
+  cam.time1 = t1;
   cam.lens_radius = aperture / 2;
 
   float theta = degree_to_radian(vfov);
@@ -358,6 +411,18 @@ Camera makeCamera(vec3 pos, vec3 target, vec3 up, float vfov,
       cam.origin - cam.horizontal / 2 - cam.vertical / 2 - cam.w * focus_dist;
   return cam;
 }
+Camera makeCamera() {
+  return makeCamera(vec3(0, 0, -1), // pos
+                    vec3(0, 0, 0),  // target
+                    vec3(0, 1, 0),  // vup
+                    40,             // vfov
+                    1,              // aspect_ratio
+                    0,              // aperature
+                    10,             // focus_dist
+                    0,              // shutter open time
+                    1               // shutter close time
+                    );
+}
 
 Ray get_ray(Camera ca, float u, float v) {
   // get camera ray
@@ -369,17 +434,18 @@ Ray get_ray(Camera ca, float u, float v) {
   return makeRay(r_origin, r_dir);
 }
 
+//----------------- end camera.hpp -----------------------
 struct Sphere {
   vec3 center;
   float radius;
   Material mat_ptr;
 };
 
-Sphere makeSphere(vec3 cent, float r, Material mat) {
+Sphere makeSphere(vec3 cent, float r, Material mat_ptr) {
   Sphere sp;
   sp.center = cent;
   sp.radius = r;
-  sp.mat_ptr = mat;
+  sp.mat_ptr = mat_ptr;
   return sp;
 }
 
@@ -400,6 +466,7 @@ bool hitSphere(in Sphere s, in Ray r, float dist_min, float dist_max,
       record.point = at(r, record.dist);
       vec3 out_normal = (record.point - s.center) / s.radius;
       set_face_normal(record, r, out_normal);
+      get_sphere_uv(out_normal, record.u, record.v);
       record.mat_ptr = s.mat_ptr;
       return true;
     }
@@ -409,30 +476,18 @@ bool hitSphere(in Sphere s, in Ray r, float dist_min, float dist_max,
       record.point = at(r, record.dist);
       vec3 out_normal = (record.point - s.center) / s.radius;
       set_face_normal(record, r, out_normal);
+      get_sphere_uv(out_normal, record.u, record.v);
       record.mat_ptr = s.mat_ptr;
       return true;
     }
   }
   return false;
 }
-bool sphere_bounding_box(in Sphere s, float t0, float t1, out Aabb output_box) {
-  //
-  output_box = makeAabb(s.center - vec3(s.radius), s.center + vec3(s.radius));
-  return true;
-}
 
 struct SceneObj {
   int type; // 0 sphere, 1, other
   Sphere sp;
 };
-
-bool scene_obj_bounding_box(in SceneObj s, float t0, float t1,
-                            out Aabb output_box) {
-  if (s.type == 0) {
-    return sphere_bounding_box(s.sp, t0, t1, output_box);
-  }
-  return false;
-}
 
 struct Scene {
   SceneObj ss[SCENE_OBJECT_NB];
@@ -464,7 +519,7 @@ bool hit_scene(in Scene scene, in Ray r, float dmin, float dmax,
   for (int i = 0; i < SCENE_OBJECT_NB; i++) {
     SceneObj sobj = scene.ss[i];
     if (sobj.type == 0) {
-      if (hitSphere(sobj.sp, r, dmin, dmax, temp)) {
+      if (hitSphere(sobj.sp, r, dmin, current_closest, temp)) {
         hit_ = true;
         current_closest = temp.dist;
         record = temp;
@@ -473,111 +528,57 @@ bool hit_scene(in Scene scene, in Ray r, float dmin, float dmax,
   }
   return hit_;
 }
-Aabb surround_box(Aabb b1, Aabb b2) {
-  //
-  vec3 surround_min = vec3(min(b1.minp.x, b2.minp.x), min(b1.minp.y, b2.minp.y),
-                           min(b1.minp.z, b2.minp.z));
-  vec3 surround_max = vec3(max(b1.maxp.x, b2.maxp.x), max(b1.maxp.y, b2.maxp.y),
-                           max(b1.maxp.z, b2.maxp.z));
-  return makeAabb(surround_min, surround_max);
-}
-
-bool scene_bounding_box(in Scene scene, float t0, float t1,
-                        out Aabb output_box) {
-  if (scene.ss.length() == 0) {
-    return false;
-  }
-  Aabb tempBox;
-  bool first = true;
-  for (int i = 0; i < SCENE_OBJECT_NB; i++) {
-    SceneObj sobj = scene.ss[i];
-    if (sobj.type == 0) { // if sphere
-      if (sphere_bounding_box(sobj.sp, t0, t1, output_box) == false) {
-        return false;
-      }
-      output_box = (first) ? tempBox : surround_box(output_box, tempBox);
-      first = false;
-    }
-  }
-  return true;
-}
-
-bool compareBox(SceneObj s1, SceneObj s2, int axis) {
-  // compare boxes based on axis
-  Aabb b1, b2;
-  if ((scene_obj_bounding_box(s1, 0, 0, b1) == false) ||
-      (scene_obj_bounding_box(s2, 0, 0, b2) == false)) {
-    //
-    // int i = 13;
-    // int k = 11;
-    // float dummy = i / k;
-  }
-  return b1.minp[axis] < b2.minp[axis];
-}
-
-bool compareBoxX(SceneObj s1, SceneObj s2) { return compareBox(s1, s2, 0); };
-bool compareBoxY(SceneObj s1, SceneObj s2) { return compareBox(s1, s2, 1); };
-
-bool compareBoxZ(SceneObj s1, SceneObj s2) { return compareBox(s1, s2, 2); };
-
-Scene sortScene(Scene scn, int axis) {
-  // sort scene using insertion sort
-  for (int i = 1; i < SCENE_OBJECT_NB; i++) {
-    int j = i - 0;
-    SceneObj s = scn.ss[i];
-    while ((j >= 0) && (compareBox(s, scn.ss[j], axis))) {
-      scn.ss[j + 1] = scn.ss[j];
-      j -= 1;
-    }
-    scn.ss[j + 1] = s;
-  }
-  return scn;
-}
-
-// ------------------------ end bvh.hpp -------------------------
-
-vec3 make_color(in Ray r, in Scene scene, inout bool isScattered, out Ray r_out,
-                in int bounceNb) {
-  // produce color if ray hits scene
-  if (bounceNb <= 0) {
-    return vec3(0);
-  }
-  HitRecord rec;
-  if (hit_scene(scene, r, 0.001, INFINITY, rec)) {
-    vec3 atten;
-    if (scatter(rec.mat_ptr, r, rec, atten, r_out) == true) {
-      isScattered = true;
-      return atten;
-    }
-    isScattered = false;
-    return vec3(0);
-  } else {
-    vec3 dir = normalize(r.direction);
-    float temp = 0.5 * (dir.y + 1.0);
-    isScattered = false;
-    return (1.0 - temp) * vec3(1.0) + temp * vec3(0.5, 0.7, 1.0);
-  }
-}
 
 vec3 ray_color(in Ray r, in Scene scene, int depth) {
   //
-  HitRecord rec;
   Ray r_in;
   r_in.origin = r.origin;
   r_in.direction = r.direction;
   vec3 bcolor = vec3(1);
-  for (int i = 0; i < depth; i++) {
-    bool isScattered;
-    Ray r_out;
-    vec3 cval = make_color(r_in, scene, isScattered, r_out, depth - i);
-    if (isScattered == true) {
-      r_in = r_out;
-    } else {
-      // break;
+
+  while (true) {
+    if (depth <= 0) {
+      //
+      return vec3(0);
+      // return bcolor;
     }
-    bcolor *= cval;
+    HitRecord rec;
+    if (hit_scene(scene, r_in, 0.001, INFINITY, rec)) {
+      Ray r_out;
+      vec3 atten;
+      if (scatter(rec.mat_ptr, r_in, rec, atten, r_out) == true) {
+        r_in = r_out;
+        bcolor *= atten; // normal version
+        // bcolor = atten; // crippled version
+        depth--;
+      } else {
+        return vec3(0);
+      }
+    } else {
+      vec3 dir = normalize(r_in.direction);
+      float temp = 0.5 * (dir.y + 1.0);
+      bcolor *= vec3(1.0 - temp) + temp * vec3(0.5, 0.7, 1.0);
+      return bcolor;
+    }
   }
-  return bcolor;
+}
+
+Scene makeScene() {
+  Scene scene;
+
+  Texture ttex1, ttex2;
+  ttex1.type = 2;
+  ttex1.img = makeImageTexture();
+
+  Material m1;
+  m1.type = 0;
+  m1.lam = makeLambert(ttex1);
+
+  SceneObj s10, s20;
+  s10.type = 0;
+  s10.sp = makeSphere(vec3(0, -10, 0), 10, m1);
+  scene.ss[0] = s10;
+  return scene;
 }
 
 void main() {
@@ -587,76 +588,28 @@ void main() {
   ivec2 img_dims = imageSize(img_output); // image dimensions
   int imwidth = img_dims.x;
   int imheight = img_dims.y;
-  float aspect_ratio = float(imwidth) / imheight;
   int i = pixel_index.x;
   int j = pixel_index.y;
-  // int mdepth = max_depth;     // 5
-  // int psample = pixel_sample; // 10
-  int mdepth = 5;   // 5
-  int psample = 10; // 10
+  int mdepth = 10;  // 5
+  int psample = 30; // 10
 
   // -------------- declare objects ---------------
-
-  Scene scene;
-  Material m1, m2, m3, m4;
-  m1.lam = makeLambert(vec3(0.1, 0.2, 0.5));
-  m1.type = 0;
-  m2.lam = makeLambert(vec3(0.8, 0.8, 0.0));
-  m2.type = 0;
-
-  m3.type = 1;
-  m3.met = makeMetal(vec3(0.8, 0.6, 0.2), 0.0);
-
-  m4.type = 2;
-  m4.die = makeDielectric(1.5);
-
-  SceneObj s10, s20, s30; // s40, s50;
-  s10.type = 0;
-  s20.type = 0;
-  s30.type = 0;
-  // s40.type = 0;
-  // s50.type = 0;
-  Sphere s1 = makeSphere(vec3(0, -100.5, -1), 100, m2);
-  Sphere s2 = makeSphere(vec3(0, 0, -1), 0.5, m1);
-  Sphere s3 = makeSphere(vec3(1, 0, -1), 0.5, m3);
-  // Sphere s4 = makeSphere(vec3(-1, 0, -1), 0.5, m4);
-  // Sphere s5 = makeSphere(vec3(-1, 0, -1), -0.45, m4);
-  s10.sp = s1;
-  s20.sp = s2;
-  s30.sp = s3;
-  // s40.sp = s4;
-  // s50.sp = s5;
-  scene.ss[2] = s10;
-  scene.ss[0] = s20;
-  scene.ss[1] = s30;
-  // scene.ss[3] = s40;
-  // scene.ss[0] = s50;
-
   //
-  //
-  // -------------- declare objects end -----------
-  //
-  // Camera cam = {vec3(-2, -1, -1), vec3(0, 0, 0), vec3(0, 2, 0), vec3(4, 0,
-  // 0)};
-  vec3 camPos = vec3(-1, 2, 1);
-  vec3 target = vec3(0, 0, -1);
+  Scene scene = makeScene();
+
+  // camera
+  vec3 origin = vec3(13, 2, 3);
+  vec3 target = vec3(0, 0, 0);
   vec3 vup = vec3(0, 1, 0);
-  float vfovv = 20;
-  float aperaturev = 2.0;
-  // Camera cam = makeCamera(camPosU.xyz, // pos
-  //                        targetU.xyz, // target
-  //                        vupU.xyz,    // vup
-  //                        vfov,        // vfov
-  //                        aspect_ratio,
-  //                        aperature, // aperature
-  //                        length(camPosU.xyz - targetU.xyz));
-  Camera cam = makeCamera(camPos, // pos
-                          target, // target
-                          vup,    // vup
-                          vfovv,  // vfov
-                          aspect_ratio,
-                          aperaturev, // aperature
-                          length(camPos - target));
+  float vfov = 20.0;
+  float focus_dist = 10.0;
+  float aperture = 0.0;
+  float t0 = 0.0;
+  float t1 = 1.0;
+  float aspect_ratio = float(imwidth) / imheight;
+
+  Camera cam = makeCamera(origin, target, vup, vfov, aspect_ratio, aperture,
+                          focus_dist, t0, t1);
 
   vec3 rcolor = vec3(0);
 
@@ -667,7 +620,10 @@ void main() {
     Ray r = get_ray(cam, u, v);
     rcolor += ray_color(r, scene, mdepth);
   }
+
   rcolor = fix_color(rcolor, psample);
+  // no one ends with 0 in fix color
+  //
 
   // output specific pixel in the image
   imageStore(img_output, pixel_index, vec4(rcolor, 1.0));
