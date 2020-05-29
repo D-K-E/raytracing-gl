@@ -86,3 +86,6 @@ change the `SCENE_OBJ_NB` accordingly.
 - The executable `compute04.out` should give you this:
   <img src="bin/media/screenshots/compute04.png" width="320" height="180"/>
 
+- The executable `compute05.out` should give you this:
+  <img src="bin/media/screenshots/compute05.png" width="320" height="180"/>
+

@@ -1,8 +1,7 @@
 #version 430
 layout(local_size_x = 1, local_size_y = 1) in; // local work_group_size
 #define SCENE_OBJECT_NB 2
-layout(rgba32f, binding = 0) uniform image2D img_output;
-layout(binding = 1) uniform sampler2D ImageTexture;
+layout(rgba32f, location = 0, binding = 0) writeonly uniform image2D img_output;
 
 // start constants
 // constants.hpp
@@ -99,6 +98,14 @@ vec3 fix_color(vec3 pcolor, int samples_per_pixel) {
   // return mixv(0.0, 0.999, sqrt(pcolor));
 }
 
+void get_sphere_uv(in vec3 p, out float u, out float v) {
+  //
+  float phi = atan(p.z, p.x);
+  float theta = asin(p.y);
+  u = 1 - (phi + PI) / (2 * PI);
+  v = (theta + PI / 2) / PI;
+}
+
 // --------------------- utility functions end --------------------------
 
 //
@@ -147,6 +154,106 @@ HitRecord makeRecord(vec3 p, vec3 n, float d, bool ff) {
   rec.front_face = ff;
   return rec;
 }
+// ----------------- perlin.hpp ---------------------------
+
+#define PERLIN_POINT_COUNT_NB 3
+
+struct Perlin {
+  int perm_x[PERLIN_POINT_COUNT_NB];
+  int perm_y[PERLIN_POINT_COUNT_NB];
+  int perm_z[PERLIN_POINT_COUNT_NB];
+  vec3 ranvec[PERLIN_POINT_COUNT_NB];
+};
+void permutate(inout int p[PERLIN_POINT_COUNT_NB], int n) {
+  //
+  for (int i = n - 1; i > 0; i--) {
+    int target = random_int(0, i);
+    int tmp = p[i];
+    p[i] = p[target];
+    p[target] = tmp;
+  }
+}
+void perlin_generate_perm(inout int p[PERLIN_POINT_COUNT_NB]) {
+  //
+
+  for (int i = 0; i < PERLIN_POINT_COUNT_NB; i++)
+    p[i] = i;
+
+  permutate(p, PERLIN_POINT_COUNT_NB);
+}
+
+Perlin makePerlin() {
+  //
+  Perlin perl;
+  for (int i = 0; i < PERLIN_POINT_COUNT_NB; ++i) {
+    perl.ranvec[i] = normalize(random_vec(-1, 1));
+  }
+
+  perlin_generate_perm(perl.perm_x);
+  perlin_generate_perm(perl.perm_y);
+  perlin_generate_perm(perl.perm_z);
+  return perl;
+}
+float perlin_interp(vec3 c[2][2][2], float u, float v, float w) {
+  float uu = u * u * (3 - 2 * u);
+  float vv = v * v * (3 - 2 * v);
+  float ww = w * w * (3 - 2 * w);
+  float accum = 0.0;
+
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < 2; j++) {
+      for (int k = 0; k < 2; k++) {
+        vec3 weight_v = vec3(u - i, v - j, w - k);
+        accum += (i * uu + (1 - i) * (1 - uu)) * (j * vv + (1 - j) * (1 - vv)) *
+                 (k * ww + (1 - k) * (1 - ww)) * dot(c[i][j][k], weight_v);
+      }
+    }
+  }
+  return accum;
+}
+float noise(Perlin perl, in vec3 p) {
+  //
+  float u = p.x - floor(p.x);
+  float v = p.y - floor(p.y);
+  float w = p.z - floor(p.z);
+  int i = int(floor(p.x));
+  int j = int(floor(p.y));
+  int k = int(floor(p.z));
+  vec3 c[2][2][2];
+
+  for (int di = 0; di < 2; di++) {
+    for (int dj = 0; dj < 2; dj++) {
+      for (int dk = 0; dk < 2; dk++) {
+        int c1, c2, c3;
+        c1 = perl.perm_x[(i + di) & 255];
+        c2 = perl.perm_y[(j + dj) & 255];
+        c3 = perl.perm_z[(k + dk) & 255];
+        int xor1 = (c1 * (1 - c2)) + (c2 * (1 - c1));
+        int xorf = xor1 * (1 - c3) + (c3 * (1 - xor1));
+
+        c[di][dj][dk] = perl.ranvec[xorf];
+      }
+    }
+  }
+
+  return perlin_interp(c, u, v, w);
+}
+
+float turbulence(in Perlin perl, in vec3 p, int depth = 7) {
+  float accum = 0.0;
+  vec3 temp_p = p;
+  float weight = 1.0;
+
+  for (int i = 0; i < depth; i++) {
+    accum += weight * noise(perl, temp_p);
+    weight *= 0.5;
+    temp_p *= 2;
+  }
+
+  return abs(accum);
+}
+
+// ----------------- end perlin.hpp -----------------------
 // ----------------- texture.hpp --------------------------
 struct SolidTexture {
   vec3 color;
@@ -176,17 +283,64 @@ vec3 checkeredValue(CheckeredTexture c, float u, float v, in vec3 p) {
   else
     return solidValue(c.even, u, v, p);
 }
+/*
+struct ImageTexture {
+  int width;
+  int height;
+};
 
-vec3 imageValue(float u, float v, in vec3 p) {
+ImageTexture makeImageTexture() {
+  ImageTexture im;
+  ivec2 img_dims = imageSize(img_output); // image dimensions
+  im.width = img_dims.x;
+  im.height = img_dims.y;
+  return im;
+}
+
+vec3 imageValue(ImageTexture im, float u, float v, in vec3 p) {
   u = clamp(u, 0.0, 1.0);
   v = 1 - clamp(v, 0.0, 1.0);
-  return texture(ImageTexture, vec2(u, v)).xyz;
+  int i = int(u * im.width);
+  int j = int(v * im.height);
+  if (i >= im.width) {
+    i = im.width - 1;
+  }
+  if (j >= im.height) {
+    j = im.height - 1;
+  }
+  vec3 color = imageLoad(img_output, ivec2(i, j)).xyz;
+  if (color == vec3(0)) {
+    color = vec3(0, u, v);
+  }
+  return color;
+}
+*/
+
+struct NoiseTexture {
+  Perlin perlin;
+  float scale;
 };
+
+NoiseTexture makeNoiseTexture(float s) {
+  NoiseTexture t;
+  t.scale = s;
+  t.perlin = makePerlin();
+  return t;
+}
+
+vec3 noiseValue(NoiseTexture ntex, float u, float v, in vec3 p) {
+  vec3 size = vec3(0.5);
+  float noiseFactor =
+      1 + sin(ntex.scale * p.z + 10 * turbulence(ntex.perlin, p));
+  return size * noiseFactor;
+}
+
 struct Texture {
-  int type; // 0 solid, 1 checkered, 2 image
+  int type; // 0 solid, 1 checkered, 2 image, 3 noise
   SolidTexture solid;
   CheckeredTexture checkered;
-  // sampler2D ImageTexture;
+  // ImageTexture img;
+  NoiseTexture n;
 };
 vec3 textureValue(Texture t, float u, float v, in vec3 p) {
   //
@@ -195,7 +349,10 @@ vec3 textureValue(Texture t, float u, float v, in vec3 p) {
   } else if (t.type == 1) {
     return checkeredValue(t.checkered, u, v, p);
   } else if (t.type == 2) {
-    return imageValue(u, v, p);
+    // return imageValue(t.img, u, v, p);
+    return vec3(0);
+  } else if (t.type == 3) {
+    return noiseValue(t.n, u, v, p);
   }
 }
 //----------------- end texture.hpp -----------------------
@@ -433,6 +590,7 @@ bool hitSphere(in Sphere s, in Ray r, float dist_min, float dist_max,
       record.point = at(r, record.dist);
       vec3 out_normal = (record.point - s.center) / s.radius;
       set_face_normal(record, r, out_normal);
+      get_sphere_uv(out_normal, record.u, record.v);
       record.mat_ptr = s.mat_ptr;
       return true;
     }
@@ -442,6 +600,7 @@ bool hitSphere(in Sphere s, in Ray r, float dist_min, float dist_max,
       record.point = at(r, record.dist);
       vec3 out_normal = (record.point - s.center) / s.radius;
       set_face_normal(record, r, out_normal);
+      get_sphere_uv(out_normal, record.u, record.v);
       record.mat_ptr = s.mat_ptr;
       return true;
     }
@@ -513,7 +672,8 @@ vec3 ray_color(in Ray r, in Scene scene, int depth) {
       vec3 atten;
       if (scatter(rec.mat_ptr, r_in, rec, atten, r_out) == true) {
         r_in = r_out;
-        bcolor *= atten;
+        // bcolor *= atten; // normal version
+        // bcolor = atten; // crippled version
         depth--;
       } else {
         return vec3(0);
@@ -530,32 +690,21 @@ vec3 ray_color(in Ray r, in Scene scene, int depth) {
 Scene makeScene() {
   Scene scene;
 
-  SolidTexture tex1 = makeSolidTexture(vec3(1));
-  SolidTexture tex2 = makeSolidTexture(vec3(0.2));
-  CheckeredTexture ctex1 = makeCheckered(tex1, tex2);
   Texture ttex1;
-  ttex1.type = 1;
-  ttex1.checkered = ctex1;
+  ttex1.type = 3;
+  ttex1.n = makeNoiseTexture(0.8); // a random scale value
 
-  Lambert lam1 = makeLambert(ttex1);
-  Lambert lam2 = makeLambert(ttex1);
-
-  Material m1, m2;
+  Material m1;
   m1.type = 0;
-  m1.lam = lam1;
-
-  m2.type = 0;
-  m2.lam = lam2;
+  m1.lam = makeLambert(ttex1);
 
   SceneObj s10, s20;
   s10.type = 0;
   s20.type = 0;
-  Sphere s1 = makeSphere(vec3(0, -10, 0), 10, m1);
-  Sphere s2 = makeSphere(vec3(0, 10, 0), 10, m2);
-  s10.sp = s1;
-  s20.sp = s2;
-  scene.ss[1] = s10;
-  scene.ss[0] = s20;
+  s10.sp = makeSphere(vec3(0, -1000, 0), 1000, m1);
+  s20.sp = makeSphere(vec3(0, 2, 0), 2, m1);
+  scene.ss[0] = s10;
+  scene.ss[1] = s20;
   return scene;
 }
 
@@ -568,8 +717,8 @@ void main() {
   int imheight = img_dims.y;
   int i = pixel_index.x;
   int j = pixel_index.y;
-  int mdepth = 55;   // 5
-  int psample = 100; // 10
+  int mdepth = 5;   // 5
+  int psample = 10; // 10
 
   // -------------- declare objects ---------------
   //
@@ -580,7 +729,7 @@ void main() {
   vec3 target = vec3(0, 0, 0);
   vec3 vup = vec3(0, 1, 0);
   float vfov = 20.0;
-  float focus_dist = 10.0;
+  float focus_dist = 5.0;
   float aperture = 0.0;
   float t0 = 0.0;
   float t1 = 1.0;
