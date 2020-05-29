@@ -2,7 +2,6 @@
 layout(local_size_x = 1, local_size_y = 1) in; // local work_group_size
 #define SCENE_OBJECT_NB 2
 layout(rgba32f, location = 0, binding = 0) writeonly uniform image2D img_output;
-layout(rgba32f, location = 1, binding = 1) readonly uniform image2D in_image;
 
 // start constants
 // constants.hpp
@@ -155,6 +154,106 @@ HitRecord makeRecord(vec3 p, vec3 n, float d, bool ff) {
   rec.front_face = ff;
   return rec;
 }
+// ----------------- perlin.hpp ---------------------------
+
+#define PERLIN_POINT_COUNT_NB 256
+
+struct Perlin {
+  int perm_x[PERLIN_POINT_COUNT_NB];
+  int perm_y[PERLIN_POINT_COUNT_NB];
+  int perm_z[PERLIN_POINT_COUNT_NB];
+  vec3 ranvec[PERLIN_POINT_COUNT_NB];
+};
+void permutate(inout int p[PERLIN_POINT_COUNT_NB], int n) {
+  //
+  for (int i = n - 1; i > 0; i--) {
+    int target = random_int(0, i);
+    int tmp = p[i];
+    p[i] = p[target];
+    p[target] = tmp;
+  }
+}
+void perlin_generate_perm(inout p[PERLIN_POINT_COUNT_NB]) {
+  //
+
+  for (int i = 0; i < PERLIN_POINT_COUNT_NB; i++)
+    p[i] = i;
+
+  permute(p, PERLIN_POINT_COUNT_NB);
+
+  return p;
+}
+
+Perlin makePerlin() {
+  //
+  Perlin perl;
+  for (int i = 0; i < PERLIN_POINT_COUNT_NB; ++i) {
+    perl.ranvec[i] = normalize(random_vec(-1, 1));
+  }
+
+  perlin_generate_perm(perl.perm_x);
+  perlin_generate_perm(perl.perm_y);
+  perlin_generate_perm(perl.perm_z);
+}
+float perlin_interp(vec3 c[2][2][2], float u, float v, float w) {
+  float uu = u * u * (3 - 2 * u);
+  float vv = v * v * (3 - 2 * v);
+  float ww = w * w * (3 - 2 * w);
+  float accum = 0.0;
+
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < 2; j++) {
+      for (int k = 0; k < 2; k++) {
+        vec3 weight_v(u - i, v - j, w - k);
+        accum += (i * uu + (1 - i) * (1 - uu)) * (j * vv + (1 - j) * (1 - vv)) *
+                 (k * ww + (1 - k) * (1 - ww)) * dot(c[i][j][k], weight_v);
+      }
+    }
+  }
+  return accum;
+}
+float noise(Perlin perl, in vec3 p) {
+  //
+  float u = p.x - floor(p.x);
+  float v = p.y - floor(p.y);
+  float w = p.z - floor(p.z);
+  int i = int(floor(p.x));
+  int j = int(floor(p.y));
+  int k = int(floor(p.z));
+  vec3 c[2][2][2];
+
+  for (int di = 0; di < 2; di++) {
+    for (int dj = 0; dj < 2; dj++) {
+      for (int dk = 0; dk < 2; dk++) {
+        int xor1 =
+            (perl.perm_x[(i + di) & 255] * (1 - perl.perm_y[(j + dj) & 255])) +
+            (perl.perm_y[(j + dj) & 255] * (1 - perl.perm_x[(i + di) & 255]));
+        int xorf = xor1 * (1 - perl.perm_z[(k + dk) & 255]) +
+                   (perl.perm_z[(k + dk) & 255] * (1 - xor1));
+
+        c[di][dj][dk] = perl.ranvec[xorf];
+      }
+    }
+  }
+
+  return perlin_interp(c, u, v, w);
+}
+
+float turbulence(in Perlin perl, in vec3 p, int depth = 7) {
+  float accum = 0.0;
+  float temp_p = p;
+  float weight = 1.0;
+
+  for (int i = 0; i < depth; i++) {
+    accum += weight * noise(perl, temp_p);
+    weight *= 0.5;
+    temp_p *= 2;
+  }
+
+  return abs(accum);
+}
+
+// ----------------- end perlin.hpp -----------------------
 // ----------------- texture.hpp --------------------------
 struct SolidTexture {
   vec3 color;
@@ -215,11 +314,29 @@ vec3 imageValue(ImageTexture im, float u, float v, in vec3 p) {
   }
   return color;
 }
+
+struct NoiseTexture {
+  Perlin perlin;
+  float scale;
+};
+
+NoiseTexture makeNoiseTexture(float s) {
+  NoiseTexture t;
+  t.scale = s;
+  t.perlin = makePerlin();
+  return t;
+}
+
+vec3 noiseValue(NoiseTexture n, float u, float v, in vec3 p) {
+  return vec3(0.5) * (1 + sin(n.scale * p.z + 10 * turbulence(n, p)));
+}
+
 struct Texture {
-  int type; // 0 solid, 1 checkered, 2 image
+  int type; // 0 solid, 1 checkered, 2 image, 3 noise
   SolidTexture solid;
   CheckeredTexture checkered;
   ImageTexture img;
+  NoiseTexture n;
 };
 vec3 textureValue(Texture t, float u, float v, in vec3 p) {
   //
@@ -229,6 +346,8 @@ vec3 textureValue(Texture t, float u, float v, in vec3 p) {
     return checkeredValue(t.checkered, u, v, p);
   } else if (t.type == 2) {
     return imageValue(t.img, u, v, p);
+  } else if (t.type == 3) {
+    return noiseValue(t.n, u, v, p);
   }
 }
 //----------------- end texture.hpp -----------------------
@@ -566,18 +685,21 @@ vec3 ray_color(in Ray r, in Scene scene, int depth) {
 Scene makeScene() {
   Scene scene;
 
-  Texture ttex1, ttex2;
-  ttex1.type = 2;
-  ttex1.img = makeImageTexture();
+  Texture ttex1;
+  ttex1.type = 3;
+  ttex1.n = makeNoiseTexture(random_double()); // a random scale value
 
   Material m1;
   m1.type = 0;
   m1.lam = makeLambert(ttex1);
 
-  SceneObj s10;
+  SceneObj s10, s20;
   s10.type = 0;
-  s10.sp = makeSphere(vec3(0, -10, 0), 10, m1);
+  s20.type = 0;
+  s10.sp = makeSphere(vec3(0, -1000, 0), 1000, m1);
+  s20.sp = makeSphere(vec3(0, 2, 0), 2, m1);
   scene.ss[0] = s10;
+  scene.ss[1] = s20;
   return scene;
 }
 

@@ -1,5 +1,9 @@
 // license: see LICENSE
 #include "window.hpp"
+//
+#define STB_IMAGE_IMPLEMENTATION
+#include <custom/stb_image.h>
+//
 
 void setTexture(GLuint texture_input, const char *fname) {
   // set texture related
@@ -26,7 +30,7 @@ void setTexture(GLuint texture_input, const char *fname) {
     gerr();
     glTexImage2D(GL_TEXTURE_2D, // target
                  0,             // level, 0 means base level
-                 GL_RGBA32F,        // internal format of image specifies color
+                 GL_RGBA32F,    // internal format of image specifies color
                  // components
                  width, height, // what it says
                  0,             // border, should be 0 at all times
@@ -48,6 +52,7 @@ void setTexture(GLuint texture_input, const char *fname) {
     glBindTexture(GL_TEXTURE_2D, 0); // unbind
   } else {
     std::cout << "Failed to load texture" << std::endl;
+    std::cout << "path: " << fname << std::endl;
   }
   stbi_image_free(data);
 }

@@ -2,4 +2,4 @@
 // license: see LICENSE
 #include "window.hpp"
 
-int main() { return launch("Compute Shader 04 Window", "compute04.comp"); }
+int main() { return launch("Compute Shader 06 Window", "compute06.comp"); }
