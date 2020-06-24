@@ -3,7 +3,8 @@ OpenGL compute shader port of
 [Raytracing in One Weekend](https://raytracing.github.io/books/RayTracingInOneWeekend.html) by P. Shirley
 
 This repository follows closely the examples introduced by the 
-phenomenal "Raytracing in One Weekend" by P. Shirley.
+phenomenal "Raytracing in One Weekend" by P. Shirley, plus couple of other
+examples from "Raytracing Next Week".
 
 I did unfortunately not document the code much, since Shirley gives a through
 explanation of how everything works. Assuming you have basic knowledge of
@@ -59,6 +60,18 @@ During the execution of `compute02.out` and onwards gpu might start to choke.
 Try lowering the size of the workgroups in the shader, if that does not help,
 try lowering the `psample` and `depth` that is passed on to `ray_color`
 function.
+
+Unless you have a very very good machine or a particular reason DO NOT LAUNCH
+`./weekend.out`. It is there as a proof of concept. Ray tracing 485 object
+naively, that is with no acceleration structure whatsoever, would surely choke
+your gpu if not produce a driver error. If you really want to see something
+similar in cover picture. I suggest you to lower the amount of spheres in the
+`random_scene` loop, and change the `SCENE_OBJ_NB` accordingly.
+
+## Known Issues
+
+- Perlin noise example `compute06.out` does not render correctly.
+
 
 ## Screenshots
 
