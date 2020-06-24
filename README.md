@@ -3,7 +3,8 @@ OpenGL compute shader port of
 [Raytracing in One Weekend](https://raytracing.github.io/books/RayTracingInOneWeekend.html) by P. Shirley
 
 This repository follows closely the examples introduced by the 
-phenomenal "Raytracing in One Weekend" by P. Shirley.
+phenomenal "Raytracing in One Weekend" by P. Shirley, plus couple of other
+examples from "Raytracing Next Week".
 
 I did unfortunately not document the code much, since Shirley gives a through
 explanation of how everything works. Assuming you have basic knowledge of
