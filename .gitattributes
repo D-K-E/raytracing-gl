@@ -1,0 +1,10 @@
+# Add syntax highlighting for compute shaders
+*.comp linguist-language=glsl
+
+# Remove vendored libraries from project's language stats
+/include/glad/** linguist-vendored
+/include/glm/** linguist-vendored
+
+# Remove vendored code files from project's language stats
+include/custom/stb_image.h -linguist-vendored
+/src/glad.c -linguist-vendored
